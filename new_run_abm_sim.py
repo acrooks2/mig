@@ -26,13 +26,13 @@ PERCENT_MOVE_AT_CONFLICT = 1
 # Percentage of refugees that move if in a district without a conflict event or a camp
 PERCENT_MOVE_AT_OTHER = 0.7
 # Number of refugees that cross the Syrian-Turkish border at each time step
-SEED_REFS = 10
+SEED_REFS = 0
 
-NUM_FRIENDS = 2  # random.randint(1,3)
+NUM_FRIENDS = 1  # random.randint(1,3)
 NUM_KIN = 1  # random.randint(1,3)
 
 # Districts that contain open border crossings during month of simulation start
-BORDER_CROSSING_LIST = ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']
+BORDER_CROSSING_LIST = [0, 1]  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']
 # # Point to calculate western movement
 LONDON_COORDS = (51.5074, -0.1278)
 
@@ -40,34 +40,18 @@ NUM_CHUNKS = 4  # mp.cpu_count()
 
 DATA_DIR = './data'
 
+MULTIPROCESS = True
+
+NUM_STEPS = 1  # 1 step = 1 day
 
 class Ref(object):
     """
     Class representative of a single refugee
     """
-    def __init__(self, node, num_refugees):
+    def __init__(self, node):
         self.node = node  # Not used. Agent ID == Index in Sim.all_refugees
         self.kin_list = {}
         self.friend_list = {}
-
-    def create_social_links(self, index, sim):
-        # create kin
-        for x in range(NUM_KIN):
-            kin = x
-            while kin != x:
-                kin = random.randint(0, sim.num_refugees)
-            self.kin_list[kin] = 1
-            # set for other kin
-            sim.all_refugees[kin].kin_list[index] = 1
-
-        # create friends
-        for x in range(NUM_FRIENDS):
-            friend = x
-            while friend != x:
-                friend = random.randint(0, sim.num_refugees)
-            self.friend_list[friend] = 1
-            # set for other friend
-            sim.all_refugees[friend].friend_list[index] = 1
 
 
 class Sim(object):
@@ -77,13 +61,41 @@ class Sim(object):
     def __init__(self, graph, num_steps=10):
         self.graph = graph
         self.num_steps = num_steps
-        self.num_refugees = sum([self.graph.nodes[n]['weight'] for n in self.graph.nodes])
-        self.all_refugees = []
-        for node in self.graph.nodes():
-            self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(self.graph.nodes[node]['weight'])])
-        for index, ref in enumerate(self.all_refugees):
-            ref.create_social_links(index, self)
         self.max_pop = None
+        self.num_refugees = sum([self.graph.nodes[n]['weight'] for n in self.graph.nodes])
+        print('creating complete graph')
+        self.all_refugees = nx.complete_graph(self.num_refugees)
+        self.kin_dict = {ref: set() for ref in self.all_refugees.nodes()}
+        print('Assigning refugees to nodes')
+        # assign refugees to nodes
+        count = 0
+        values = {}
+        for node in self.graph.nodes():
+            values.update({ref: node for ref in range(count, count+self.graph.nodes[node]['weight'])})
+            count += self.graph.nodes[node]['weight']
+
+        nx.set_node_attributes(self.all_refugees, values, 'location')
+        # nx.set_node_attributes(self.all_refugees, set(), 'kin')
+        nx.set_edge_attributes(self.all_refugees, 0, 'weight')
+
+        print('Creating social links')
+        # create social links between refs
+        for ref in self.all_refugees.nodes():
+            self.kin_dict[ref] = set()
+            for x in range(NUM_KIN):
+                #print('----')
+                kin = ref
+                while kin == ref:  # (kin in self.all_refugees.nodes[index]['kin'])
+                    kin = random.randint(0, self.num_refugees-1)
+                self.kin_dict[ref].add(kin)
+                # set for other kin
+                self.kin_dict[kin].add(ref)
+            # create friends
+            for x in range(NUM_FRIENDS):
+                friend = ref
+                while friend == ref:
+                    friend = random.randint(0, self.num_refugees-1)
+                self.all_refugees.edges[ref, friend]['weight'] = 9.0  # 7 = lowest friend. 9 is initializer.
 
     def find_new_node(self, node, ref):
 
@@ -99,8 +111,8 @@ class Sim(object):
             # print(ref_pop, "refugees can't move from isolates", node)
             return
 
-        kin_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].kin_list]
-        friend_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].kin_list]
+        kin_nodes = [self.all_refugees.nodes[kin]['location'] for kin in self.kin_dict[ref]]
+        friend_nodes = [neigh for neigh in self.all_refugees.neighbors(ref) if self.all_refugees.edges[ref, neigh]['weight'] >= 7]
 
         # calculate neighbor with highest population
         for n in neighbors:
@@ -120,11 +132,11 @@ class Sim(object):
     def process_refs(self, refs):
         print('Starting process...')
 
-        new_refs = []
+        new_refs = {}
         new_weights = {key: 0 for key in self.graph.nodes}
 
-        for x, ref in enumerate(refs):
-            node = self.all_refugees[ref].node
+        for ref in refs:
+            node = self.all_refugees.nodes[ref]['location']
             num_conflicts = self.graph.nodes[node]['num_conflicts']
             num_camps = self.graph.nodes[node]['num_camps']
 
@@ -138,16 +150,16 @@ class Sim(object):
                 # Neither camp nor conflict - 0.5 move chance
                 move = random.random() < PERCENT_MOVE_AT_OTHER
 
-            new_refs.append(copy.deepcopy(self.all_refugees[ref]))
-
             if not move:
+                # new_refs[ref] = ref
                 continue
 
             # Create a copy of refugee, assign new node attribute
             new_node = self.find_new_node(node, ref)
             if new_node is None:
+                # new_refs.append(ref)
                 continue
-            new_refs[x].node = new_node
+            new_refs[ref] = new_node
 
             # Update weight dict
             new_weights[node] -= 1
@@ -161,34 +173,66 @@ class Sim(object):
         orig_weights = nx.get_node_attributes(graph, 'weight')
 
         self.max_pop = max(orig_weights.values())
-        chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], NUM_CHUNKS)
-        print('Multiprocessing...')
-        results = Pool(NUM_CHUNKS).map(self.process_refs, chunked_refs)
+        chunked_refs = np.array_split([x for x in range(len(self.all_refugees.nodes))], NUM_CHUNKS)
 
-        self.all_refugees = []
+        if MULTIPROCESS:
+            results = Pool(NUM_CHUNKS).map(self.process_refs, chunked_refs)
+        else:
+            results = []
+            for chunk in chunked_refs:
+                results.append(self.process_refs(chunk))
+
+        new_refugee_nodes = {}
         new_weights = []
         new_weights.append(orig_weights)
         for result in results:
-            self.all_refugees.extend(result[0])
+            new_refugee_nodes.update(result[0])
             new_weights.append(result[1])
 
         # self.all_refugees = new_refs
 
+        nx.set_node_attributes(self.all_refugees, new_refugee_nodes, 'location')
+
         new_weights = pd.DataFrame(new_weights)
-
         new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
-
         nx.set_node_attributes(self.graph, new_weights, 'weight')
 
         # seed border crossing nodes with new refugees
-        new_ref_index = self.num_refugees
+        start_index = new_ref_index = self.num_refugees
         self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
+
+        old_refugees = copy.copy(self.all_refugees)
+
+        self.all_refugees = nx.complete_graph(self.num_refugees)
+        self.all_refugees.update(old_refugees)
+
         for node in BORDER_CROSSING_LIST:
             self.graph.nodes[node]['weight'] += SEED_REFS
-            self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, SEED_REFS)])
+            for ref in range(new_ref_index, new_ref_index + SEED_REFS):
+                self.kin_dict[ref] = set()
+            new_ref_index += SEED_REFS
 
-        for index in range(new_ref_index, self.num_refugees):
-            self.all_refugees[index].create_social_links(index, self)
+            # [self.all_refugees.add_node(ref+new_ref_index) for ref in range(0, SEED_REFS)]
+            # values = [self.kin_dict[ref] = set() for ref in range(0, SEED_REFS)]
+            # nx.set_node_attributes(self.all_refugees, values, '')
+            # new_ref_index += SEED_REFS
+
+        for index in range(start_index, len(self.all_refugees.nodes)):
+            # create kin
+            for x in range(NUM_KIN):
+                kin = index
+                while (kin == index):  # or (kin in self.all_refugees.nodes[index]['kin'])
+                    kin = random.randint(0, self.num_refugees-1)
+                self.kin_dict[index].add(kin)
+                # set for other kin
+                self.kin_dict[kin].add(index)
+
+            # create friends
+            for x in range(NUM_FRIENDS):
+                friend = index
+                while friend == index:
+                    friend = random.randint(0, self.num_refugees-1)
+                self.all_refugees.edges[index, friend]['weight'] = 9.0  # 7 = lowest friend. 9 is initializer.
 
     def run(self):
         # Add status bar for simulation run
@@ -199,8 +243,8 @@ class Sim(object):
             self.step(x)
             step_time = time.time() - start
             avg_step_time += step_time
-            print(f'Step Time: {step_time:2f}')
-        print(f'Average step time: {step_time:2f}')
+            print(f'Step Time: {step_time:.2f}')
+        print(f'Average step time: {step_time:.2f}')
 
 
 def build_graph():
@@ -372,16 +416,16 @@ if __name__ == '__main__':
     graph, polys = build_graph()
 
     # graph = nx.complete_graph(40)
-    #
-    # nx.set_node_attributes(graph, name='weight', values=5000)
+    # nx.set_node_attributes(graph, name='weight', values=500)
     # nx.set_node_attributes(graph, name='num_conflicts', values=0)
     # nx.set_node_attributes(graph, name='num_camps', values=1)
     # nx.set_node_attributes(graph, name='location_score', values=0.5)
 
     # Run Sim
-    # Set number of simulation steps; 1 step = 1 day
-    num_steps = 1
-    sim = Sim(graph, num_steps)
+    start = time.time()
+    sim = Sim(graph, NUM_STEPS)
+    print('Time to build -', time.time() - start)
+
 
     start_node_weights = nx.get_node_attributes(graph, 'weight')
     sim.run()
