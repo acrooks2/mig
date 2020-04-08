@@ -64,8 +64,10 @@ class Sim(object):
         self.max_pop = None
         self.num_refugees = sum([self.graph.nodes[n]['weight'] for n in self.graph.nodes])
         print('creating complete graph')
-        self.all_refugees = nx.complete_graph(self.num_refugees)
+        self.all_refugees = nx.Graph()  # complete_graph(self.num_refugees)
+        self.all_refugees.add_nodes_from([ref for ref in range(self.num_refugees)])
         self.kin_dict = {ref: set() for ref in self.all_refugees.nodes()}
+        print(list(self.all_refugees.nodes)[:10])
         print('Assigning refugees to nodes')
         # assign refugees to nodes
         count = 0
@@ -83,7 +85,6 @@ class Sim(object):
         for ref in self.all_refugees.nodes():
             self.kin_dict[ref] = set()
             for x in range(NUM_KIN):
-                #print('----')
                 kin = ref
                 while kin == ref:  # (kin in self.all_refugees.nodes[index]['kin'])
                     kin = random.randint(0, self.num_refugees-1)
@@ -95,7 +96,7 @@ class Sim(object):
                 friend = ref
                 while friend == ref:
                     friend = random.randint(0, self.num_refugees-1)
-                self.all_refugees.edges[ref, friend]['weight'] = 9.0  # 7 = lowest friend. 9 is initializer.
+                self.all_refugees.add_edge(ref, friend, weight=2.0)  # 7 = lowest friend. 9 is initializer.
 
     def find_new_node(self, node, ref):
 
@@ -112,7 +113,7 @@ class Sim(object):
             return
 
         kin_nodes = [self.all_refugees.nodes[kin]['location'] for kin in self.kin_dict[ref]]
-        friend_nodes = [neigh for neigh in self.all_refugees.neighbors(ref) if self.all_refugees.edges[ref, neigh]['weight'] >= 7]
+        friend_nodes = [neigh for neigh in self.all_refugees.neighbors(ref)]  # if self.all_refugees.edges[ref, neigh]['weight'] >= 7
 
         # calculate neighbor with highest population
         for n in neighbors:
@@ -206,6 +207,7 @@ class Sim(object):
         self.all_refugees = nx.complete_graph(self.num_refugees)
         self.all_refugees.update(old_refugees)
 
+    def stop(self):
         for node in BORDER_CROSSING_LIST:
             self.graph.nodes[node]['weight'] += SEED_REFS
             for ref in range(new_ref_index, new_ref_index + SEED_REFS):
@@ -413,13 +415,14 @@ if __name__ == '__main__':
     Program Execution starts here
     """
 
-    graph, polys = build_graph()
+    print('Building input files')
+    # graph, polys = build_graph()
 
-    # graph = nx.complete_graph(40)
-    # nx.set_node_attributes(graph, name='weight', values=500)
-    # nx.set_node_attributes(graph, name='num_conflicts', values=0)
-    # nx.set_node_attributes(graph, name='num_camps', values=1)
-    # nx.set_node_attributes(graph, name='location_score', values=0.5)
+    graph = nx.complete_graph(50)
+    nx.set_node_attributes(graph, name='weight', values=500)
+    nx.set_node_attributes(graph, name='num_conflicts', values=0)
+    nx.set_node_attributes(graph, name='num_camps', values=1)
+    nx.set_node_attributes(graph, name='location_score', values=0.5)
 
     # Run Sim
     start = time.time()
