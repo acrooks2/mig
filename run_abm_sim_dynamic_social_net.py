@@ -46,13 +46,12 @@ NUM_STEPS = 1
 SOCIAL_WINDOW = 3  # 1 (as soon as refs meet at node a link is formed) ... n
 BREAK_WINDOW = 2   #  0 (links break if not at the same node) .... n
 
-logging.getLogger().setLevel(logging.ERROR)
 
 class Ref(object):
     """
     Class representative of a single refugee
     """
-    def __init__(self, node, num_refugees):
+    def __init__(self, node):
         self.node = node  # Not used. Agent ID == Index in Sim.all_refugees
         self.kin_list = {}
         self.friend_list = set()
@@ -113,7 +112,7 @@ class Sim(object):
         for friend in range(lower, upper):
             self.sparse_matrices[0][index, friend] = True
 
-        return Ref(node, self.num_refugees)
+        return Ref(node)
 
     def find_new_node(self, node, ref):
 
@@ -130,7 +129,7 @@ class Sim(object):
             return
 
         kin_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].kin_list]
-        friend_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].friend_list]
+        friend_nodes = [self.all_refugees[friend].node for friend in self.all_refugees[ref].friend_list]
 
         # calculate neighbor with highest population
         for n in neighbors:

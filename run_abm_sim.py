@@ -32,7 +32,7 @@ NUM_FRIENDS = 2  # random.randint(1,3)
 NUM_KIN = 1  # random.randint(1,3)
 
 # Districts that contain open border crossings during month of simulation start
-BORDER_CROSSING_LIST = [0, 1, 2, 3]  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']
+BORDER_CROSSING_LIST = ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'] # [0, 1, 2, 3]
 # # Point to calculate western movement
 LONDON_COORDS = (51.5074, -0.1278)
 
@@ -102,7 +102,7 @@ class Sim(object):
             return
 
         kin_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].kin_list]
-        friend_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].friend_list]
+        friend_nodes = [self.all_refugees[friend].node for friend in self.all_refugees[ref].friend_list]
 
         # calculate neighbor with highest population
         for n in neighbors:
@@ -379,14 +379,14 @@ if __name__ == '__main__':
     Program Execution starts here
     """
 
-    # graph, polys = build_graph()
+    graph, polys = build_graph()
 
-    graph = nx.complete_graph(50)
-
-    nx.set_node_attributes(graph, name='weight', values=50)
-    nx.set_node_attributes(graph, name='num_conflicts', values=0)
-    nx.set_node_attributes(graph, name='num_camps', values=1)
-    nx.set_node_attributes(graph, name='location_score', values=0.5)
+    # graph = nx.complete_graph(50)
+    #
+    # nx.set_node_attributes(graph, name='weight', values=50)
+    # nx.set_node_attributes(graph, name='num_conflicts', values=0)
+    # nx.set_node_attributes(graph, name='num_camps', values=1)
+    # nx.set_node_attributes(graph, name='location_score', values=0.5)
 
     # Run Sim
     # Set number of simulation steps; 1 step = 1 day
