@@ -10,47 +10,116 @@ import time
 import math
 import copy
 import random
+import logging
 import unidecode
 import numpy as np
 import pandas as pd
 import networkx as nx
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from scipy import sparse
 from multiprocessing.pool import Pool
+from functools import partial
+from tqdm import tqdm
+import multiprocessing as mp
 
 # CONSTANTS
-
-# Location of shapefiles to build graph from
-DATA_DIR = './data'
-
-# Set number of simulation steps; 1 step = 1 day
-NUM_STEPS = 1
-
-# Number of friendships and kin to create
-NUM_FRIENDS = 1  # random.randint(1,3)
-NUM_KIN = 1  # random.randint(1,3)
-
-
 # Percentage of refugees that move if in a district with one or more refugee camps
 PERCENT_MOVE_AT_CAMP = 0.3
 # Percentage of refugees that move if in a district with one of more conflict events
 PERCENT_MOVE_AT_CONFLICT = 1
 # Percentage of refugees that move if in a district without a conflict event or a camp
 PERCENT_MOVE_AT_OTHER = 0.7
+# Number of refugees that cross the Syrian-Turkish border at each time step
+SEED_REFS = 5
 
+NUM_FRIENDS = 2  # random.randint(1,3)
+NUM_KIN = 1  # random.randint(1,3)
+
+# Districts that contain open border crossings during month of simulation start
+BORDER_CROSSING_LIST = ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']
 # # Point to calculate western movement
 LONDON_COORDS = (51.5074, -0.1278)
 
-# Weight of # friends at node. (num friends * FRIEND_AT_NODE_WEIGHT)
-FRIEND_AT_NODE_WEIGHT = 0.5
-
-# Number of refugees that cross the Syrian-Turkish border at each time step
-SEED_REFS = 10
-# Districts that contain open border crossings during month of simulation start
-BORDER_CROSSING_LIST = []  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']  # [0, 1, 2, 3]
-
-# Number of chunks (processes) to split refugees into during a sim step
 NUM_CHUNKS = 4  # mp.cpu_count()
+
+DATA_DIR = './data'
+NUM_STEPS = 1
+SOCIAL_WINDOW = 3  # 1 (as soon as refs meet at node a link is formed) ... n
+BREAK_WINDOW = 2  # 0 (links break if not at the same node) .... n
+
+
+def find_new_node(graph, all_refugees, node, ref):
+    # find neighbor with highest weight
+    neighbors = list(graph.neighbors(node))
+
+    # initialize max node value to negative number
+    most_desirable_score = -99
+    most_desirable_neighbor = None
+
+    # check to see if there are neighbors (in case node is isolate)
+    if len(neighbors) == 0:
+        # print(ref_pop, "refugees can't move from isolates", node)
+        return
+
+    kin_nodes = [all_refugees[kin].node for kin in all_refugees[ref].kin_list]
+    friend_nodes = [all_refugees[friend].node for friend in all_refugees[ref].friend_list]
+
+    # calculate neighbor with highest population
+    for n in neighbors:
+        kin_at_node = kin_nodes.count(n)
+        friends_at_node = friend_nodes.count(n)
+        desirability = kin_at_node + (friends_at_node / 2) + graph.nodes[n]['node_score']
+        if desirability > most_desirable_score:
+            most_desirable_score = desirability
+            most_desirable_neighbor = n
+
+    return most_desirable_neighbor
+
+
+def process_refs(refs, graph, all_refugees):
+    print('Starting process...')
+
+    new_refs = []
+    new_weights = {key: 0 for key in graph.nodes}
+    ref_nodes = {key: [] for key in graph.nodes}
+
+    for x, ref in enumerate(refs):
+        node = all_refugees[ref].node
+        num_conflicts = graph.nodes[node]['num_conflicts']
+        num_camps = graph.nodes[node]['num_camps']
+
+        if num_conflicts > 0:
+            # Conflict zone - 1.0 move chance
+            move = True
+        elif num_camps:
+            # At a camp - 0.003 move chance
+            move = random.random() < PERCENT_MOVE_AT_CAMP
+        else:
+            # Neither camp nor conflict - 0.5 move chance
+            move = random.random() < PERCENT_MOVE_AT_OTHER
+
+        new_refs.append(copy.deepcopy(all_refugees[ref]))
+
+        if not move:
+            ref_nodes[new_refs[x].node].append(ref)
+            continue
+
+        # Create a copy of refugee, assign new node attribute
+        new_node = find_new_node(graph, all_refugees, node, ref)
+        if new_node is None:
+            continue
+        new_refs[x].node = new_node
+
+        # Update weight dict
+        new_weights[node] -= 1
+        new_weights[new_node] += 1
+
+        # Update node ref lists
+        ref_nodes[new_refs[x].node].append(ref)
+
+    # return new refugee list and node weight updates for these refs
+    return new_refs, new_weights, ref_nodes
 
 
 class Ref(object):
@@ -58,10 +127,10 @@ class Ref(object):
     Class representative of a single refugee
     """
 
-    def __init__(self, node, num_refugees):
+    def __init__(self, node):
         self.node = node  # Not used. Agent ID == Index in Sim.all_refugees
         self.kin_list = {}
-        self.friend_list = {}
+        self.friend_list = set()
 
     def create_social_links(self, index, sim):
         # create kin
@@ -78,9 +147,12 @@ class Ref(object):
             friend = index
             while friend == index:
                 friend = random.randint(0, sim.num_refugees - 1)
-            self.friend_list[friend] = 1
+            self.friend_list.add(friend)
             # set for other friend
-            sim.all_refugees[friend].friend_list[index] = 1
+            sim.all_refugees[friend].friend_list.add(index)
+            # set in sparse matrix
+            sim.friends[friend, index] = True
+            sim.friends[index, friend] = True
 
 
 class Sim(object):
@@ -88,140 +160,142 @@ class Sim(object):
     Class representative of the simulation
     """
 
-    def __init__(self, graph, num_steps=10):
+    def __init__(self, graph, num_steps=10, social_window=7, break_window=4):
         self.graph = graph
         self.num_steps = num_steps
         self.num_refugees = sum([self.graph.nodes[n]['weight'] for n in self.graph.nodes])
+
+        self.social_window = social_window
+        self.break_window = break_window
+        self.sparse_matrices = [sparse.lil_matrix((self.num_refugees, self.num_refugees)) for x in range(social_window)]
+
         self.all_refugees = []
-        for node in self.graph.nodes():
-            self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(self.graph.nodes[node]['weight'])])
+        initial_pos_row = []
+        initial_pos_col = []
+
+        # print(nx.get_node_attributes(self.graph, 'weight'))
+        for node in tqdm(self.graph.nodes()):
+            if node in 'Nizip':  # Nizip  Kurtalan
+                print('Node:', node)
+                lower = len(self.all_refugees)
+                upper = lower + self.graph.nodes[node]['weight']
+                initial_pos_col.extend([x for x in range(lower, upper)] * (upper - lower))
+                self.all_refugees.extend(
+                    [(self.create_ref(node, x, lower, upper), initial_pos_row.extend([x] * (upper - lower))) for x in
+                     range(lower, upper)])
+                data = [True] * len(initial_pos_col)
+                test = sparse.coo_matrix((data, (initial_pos_row, initial_pos_col)), (self.num_refugees, self.num_refugees))
+                sparse.save_npz('test', test, compressed=True)
+
+        self.friends = sparse.lil_matrix((self.num_refugees, self.num_refugees))
         for index, ref in enumerate(self.all_refugees):
             ref.create_social_links(index, self)
+        # self.sparse_matrices[0] = self.friends
+        # Convert all matrices to CSR format for fast arithmetic operations
+        for matrix in self.sparse_matrices:
+            matrix.tocsr()
 
-    def find_new_node(self, node, ref):
-        # find neighbor with highest weight
-        neighbors = list(self.graph.neighbors(node))
+        self.max_pop = None
 
-        # initialize max node value to negative number
-        most_desirable_score = -99
-        most_desirable_neighbor = None
+    def create_ref(self, node, index, lower, upper):
+        # for friend in range(lower, upper):
+        #     self.sparse_matrices[0][index, friend] = True
 
-        # check to see if there are neighbors (in case node is isolate)
-        if len(neighbors) == 0:
-            # print(ref_pop, "refugees can't move from isolates", node)
-            return
+        rows = [index] * (upper - lower)
+        # cols = [x for x in range(lower, upper)]
 
-        kin_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].kin_list]
-        friend_nodes = [self.all_refugees[friend].node for friend in self.all_refugees[ref].friend_list]
-
-        # calculate neighbor with highest population
-        for n in neighbors:
-            kin_at_node = kin_nodes.count(n)
-            friends_at_node = friend_nodes.count(n)
-            desirability = kin_at_node + (friends_at_node * FRIEND_AT_NODE_WEIGHT) + self.graph.nodes[n][
-                'node_score']  # + self.graph.nodes[n]['']
-            if desirability > most_desirable_score:
-                most_desirable_score = desirability
-                most_desirable_neighbor = n
-
-        return most_desirable_neighbor
-
-    def process_refs(self, refs):
-        print('Starting process...')
-
-        new_refs = []
-        new_weights = {key: 0 for key in self.graph.nodes}
-
-        for x, ref in enumerate(refs):
-            node = self.all_refugees[ref].node
-            num_conflicts = self.graph.nodes[node]['num_conflicts']
-            num_camps = self.graph.nodes[node]['num_camps']
-
-            if num_conflicts > 0:
-                # Conflict zone - 1.0 move chance
-                move = True
-            elif num_camps:
-                # At a camp - 0.003 move chance
-                move = random.random() < PERCENT_MOVE_AT_CAMP
-            else:
-                # Neither camp nor conflict - 0.5 move chance
-                move = random.random() < PERCENT_MOVE_AT_OTHER
-
-            new_refs.append(copy.deepcopy(self.all_refugees[ref]))
-
-            if not move:
-                continue
-
-            # Create a copy of refugee, assign new node attribute
-            new_node = self.find_new_node(node, ref)
-            if new_node is None:
-                continue
-            new_refs[x].node = new_node
-
-            # Update weight dict
-            new_weights[node] -= 1
-            new_weights[new_node] += 1
-
-        # return new refugee list and node weight updates for these refs
-        return new_refs, new_weights
+        return Ref(node)
 
     def step(self, step):
         nx.get_node_attributes(graph, 'weight')
         orig_weights = nx.get_node_attributes(graph, 'weight')
 
         # Update normalized node weights
-        max_pop = max(orig_weights.values())
-        norm_weights = [x / max_pop for x in orig_weights.values()]
+        self.max_pop = max(orig_weights.values())
+        norm_weights = [x / self.max_pop for x in orig_weights.values()]
         norm_weights = dict(zip(orig_weights.keys(), norm_weights))
         nx.set_node_attributes(self.graph, norm_weights, 'norm_weight')
-
-        num_camps = nx.get_node_attributes(self.graph, 'num_camps')
-        num_conflicts = nx.get_node_attributes(self.graph, 'num_conflicts')
-
         # Update node score
         location_scores = nx.get_node_attributes(self.graph, 'location_score')
-        node_scores = [w + x + (y * .05) + (z * -.05) for w, x, y, z in
-                       zip(norm_weights.values(), location_scores.values(), num_camps.values(), num_conflicts.values())]
+        node_scores = [x + y for x, y in zip(norm_weights.values(), location_scores.values())]
         node_scores = dict(zip(norm_weights.keys(), node_scores))
         nx.set_node_attributes(self.graph, node_scores, 'node_score')
 
-        # Whether to process in paralle or synchronously
-        if NUM_CHUNKS > 1:
-            print('Multiprocessing...')
-            # Chunk refs and send to processes
-            chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], NUM_CHUNKS)
-            results = Pool(NUM_CHUNKS).map(self.process_refs, chunked_refs)
-        else:
-            print('Not Multiprocessing')
-            results = [self.process_refs([x for x in range(len(self.all_refugees))])]
-
-        print(len(results))
-        # print(results)
-
+        # Chunk refs and send to processes
+        chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], NUM_CHUNKS)
+        print('Multiprocessing...')
+        process = partial(process_refs, graph=self.graph, all_refugees=self.all_refugees)
+        results = Pool(NUM_CHUNKS).map(process, chunked_refs)
+        print('Aggregating results...')
         self.all_refugees = []
-        new_weights = []
-        new_weights.append(orig_weights)
+        new_weights = [orig_weights]
+        ref_nodes = []
         for result in results:
             self.all_refugees.extend(result[0])
             new_weights.append(result[1])
+            ref_nodes.append(result[2])
 
-        # self.all_refugees = new_refs
+        print('Updating node refugee lists...')
+        # Update node refugee lists (contains the indices of refugees at node)
+        ref_nodes = pd.DataFrame(ref_nodes)
+        ref_nodes = dict(zip(self.graph.nodes, list(ref_nodes.sum())))
 
+        print('Updating friend network...')
+        # update friend network
+        self.sparse_matrices.pop()
+        new_matrix = sparse.lil_matrix((self.num_refugees, self.num_refugees))
+        # fill new matrix - todo - multi
+        for refugees in ref_nodes.values():
+            for i in refugees:
+                for j in refugees[i + 1:]:
+                    new_matrix[i, j] = True
+
+        self.sparse_matrices = [new_matrix.tocsr()] + self.sparse_matrices
+
+        friends = sparse.csr_matrix((self.num_refugees, self.num_refugees))
+        for hist_matrix in self.sparse_matrices[:self.break_window]:
+            friends += hist_matrix
+
+        break_friends = friends < 1  # if friends and havent been at the same node in social window
+        break_friends = ((break_friends + self.friends) == 2)  # only remove if currently friends
+
+        # for x in range(12):
+        #     print((self.friends>=1)[0, x], break_friends[0, x])  # test1[0,x]
+
+        # Loop relationships to break
+        print('Breaking friendships...')
+        arr1, arr2 = break_friends.nonzero()
+        for keys in zip(arr1, arr2):
+            # print(keys[0], keys[1])
+            self.all_refugees[keys[0]].friend_list.remove(keys[1])
+
+        friends = sparse.csr_matrix((self.num_refugees, self.num_refugees))
+        for hist_matrix in self.sparse_matrices[:self.social_window]:
+            friends += hist_matrix
+        self.friends = (friends >= self.social_window)
+
+        # Loop friendships to create
+        print('Creating friendships...')
+        # Maybe best to get unique tuples of keys
+        arr1, arr2 = self.friends.nonzero()
+        for ref1, ref2 in zip(arr1, arr2):
+            self.all_refugees[ref1].friend_list.add(ref2)
+
+        # print(sim.all_refugees[0].friend_list, ref_nodes)
+        # update weights in networkx
         new_weights = pd.DataFrame(new_weights)
-
         new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
-
         nx.set_node_attributes(self.graph, new_weights, 'weight')
 
         # seed border crossing nodes with new refugees
-        new_ref_index = self.num_refugees
-        self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
-        for node in BORDER_CROSSING_LIST:
-            self.graph.nodes[node]['weight'] += SEED_REFS
-            self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, SEED_REFS)])
-
-        for index in range(new_ref_index, self.num_refugees):
-            self.all_refugees[index].create_social_links(index, self)
+        # new_ref_index = self.num_refugees
+        # self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
+        # for node in BORDER_CROSSING_LIST:
+        #     self.graph.nodes[node]['weight'] += SEED_REFS
+        #     self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, SEED_REFS)])
+        #
+        # for index in range(new_ref_index, self.num_refugees):
+        #     self.all_refugees[index].create_social_links(index, self)
 
     def run(self):
         # Add status bar for simulation run
@@ -398,35 +472,32 @@ def build_graph():
     return graph, polys
 
 
-# def build_graph(geoDF):
-#
-#
-#     pass
-
-
 if __name__ == '__main__':
     """
     Program Execution starts here
     """
 
-    # graph, polys = build_graph()
+    graph, polys = build_graph()
 
-    graph = nx.complete_graph(500)
-
-    nx.set_node_attributes(graph, name='weight', values=500)
-    nx.set_node_attributes(graph, name='num_conflicts', values=0)
-    nx.set_node_attributes(graph, name='num_camps', values=1)
-    nx.set_node_attributes(graph, name='location_score', values=0.5)
+    # graph = nx.complete_graph(10)
+    #
+    # nx.set_node_attributes(graph, name='weight', values=500)
+    # nx.set_node_attributes(graph, name='num_conflicts', values=0)
+    # nx.set_node_attributes(graph, name='num_camps', values=1)
+    # nx.set_node_attributes(graph, name='location_score', values=0.5)
 
     # Run Sim
+    # Set number of simulation steps; 1 step = 1 day
     print('Creating sim...')
     start = time.time()
-    sim = Sim(graph, NUM_STEPS)
+    sim = Sim(graph, NUM_STEPS, SOCIAL_WINDOW, BREAK_WINDOW)
     print(f'Created sim in {time.time() - start:2f}s...')
+    # print(sim.all_refugees[0].friend_list)
+
     start_node_weights = nx.get_node_attributes(graph, 'weight')
     sim.run()
     end_node_weights = nx.get_node_attributes(graph, 'weight')
-
+    # print(sim.all_refugees[0].friend_list)
     # print starting and ending node weights
     # for node in graph.nodes:
     #     print(node, start_node_weights[node], end_node_weights[node])
