@@ -25,7 +25,7 @@ NUM_NODES = 5
 TOTAL_NUM_REFUGEES = 500  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
 # For running against real data
-PREPROCESS = True
+PREPROCESS = False
 
 # Location of data
 DATA_DIR = './data'
@@ -50,8 +50,13 @@ PERCENT_MOVE_AT_OTHER = 0.7
 # Point to calculate western movement
 LOCATION = (51.5074, -0.1278)
 
-# Weight of # friends at node. (num friends * FRIEND_AT_NODE_WEIGHT)
-FRIEND_AT_NODE_WEIGHT = 0.5
+# Weight of each of the node desirability variables
+POPULATION_WEIGHT = .25  # total number of refs at node
+LOCATION_WEIGHT = .25  # closeness to LOCATION point
+CAMP_WEIGHT = .25  # (camps * CAMP_WEIGHT)
+CONFLICT_WEIGHT = .25  # (conflicts * (-1) * CONFLICT_WEIGHT)
+KIN_WEIGHT = .25  # (num kin * FRIEND_WEIGHT)
+FRIEND_WEIGHT = .25  # (num friends * KIN_WEIGHT)
 
 # Number of refugees that cross the Syrian-Turkish border at each time step
 SEED_REFS = 10
@@ -127,8 +132,7 @@ class Sim(object):
         for n in neighbors:
             kin_at_node = kin_nodes.count(n)
             friends_at_node = friend_nodes.count(n)
-            desirability = kin_at_node + (friends_at_node * FRIEND_AT_NODE_WEIGHT) + self.graph.nodes[n][
-                'node_score']  # + self.graph.nodes[n]['']
+            desirability = (kin_at_node * KIN_WEIGHT) + (friends_at_node * FRIEND_WEIGHT) + self.graph.nodes[n]['node_score']  # + self.graph.nodes[n]['']
             if desirability > most_desirable_score:
                 most_desirable_score = desirability
                 most_desirable_neighbor = n
@@ -174,7 +178,7 @@ class Sim(object):
         # return new refugee list and node weight updates for these refs
         return new_refs, new_weights
 
-    def step(self, step):
+    def step(self):
         nx.get_node_attributes(self.graph, 'weight')
         orig_weights = nx.get_node_attributes(self.graph, 'weight')
 
@@ -184,17 +188,26 @@ class Sim(object):
         norm_weights = dict(zip(orig_weights.keys(), norm_weights))
         nx.set_node_attributes(self.graph, norm_weights, 'norm_weight')
 
+        # Normalize camps
         num_camps = nx.get_node_attributes(self.graph, 'num_camps')
+        max_camps = max(num_camps.values())
+        num_camps = [x / max_camps for x in num_camps.values()]
+
+        # Normalize conflicts
         num_conflicts = nx.get_node_attributes(self.graph, 'num_conflicts')
+        max_conflict = max(num_conflicts.values())
+        num_conflicts = [x / max_conflict for x in num_conflicts.values()]
 
         # Update node score
         location_scores = nx.get_node_attributes(self.graph, 'location_score')
-        node_scores = [w + x + (y * .05) + (z * -.05) for w, x, y, z in
-                       zip(norm_weights.values(), location_scores.values(), num_camps.values(), num_conflicts.values())]
+        node_scores = [
+            (w * POPULATION_WEIGHT) + (x * LOCATION_WEIGHT) + (y * CAMP_WEIGHT) + (z * (-1) * CONFLICT_WEIGHT) for
+            w, x, y, z in
+            zip(norm_weights.values(), location_scores.values(), num_camps, num_conflicts)]
         node_scores = dict(zip(norm_weights.keys(), node_scores))
         nx.set_node_attributes(self.graph, node_scores, 'node_score')
 
-        # Whether to process in paralle or synchronously
+        # Whether to process in parallel or synchronously
         if NUM_CHUNKS > 1:
             print('Multiprocessing...')
             # Chunk refs and send to processes
@@ -238,7 +251,7 @@ class Sim(object):
         for x in list(range(self.num_steps)):
             start = time.time()
             print(f'Starting step {x + 1}')
-            self.step(x)
+            self.step()
             step_time = time.time() - start
             avg_step_time += step_time
             print(f'Step Time: {step_time:2f}')
@@ -303,7 +316,8 @@ def preprocess():
     ## Add location score
     # Calculate location score. Districts closest to specified location are scored highest.
     polys['location'] = polys.apply(
-        lambda row: math.sqrt((row.geometry.centroid.x - LOCATION[1]) ** 2 + (row.geometry.centroid.y - LOCATION[0]) ** 2), axis=1)
+        lambda row: math.sqrt(
+            (row.geometry.centroid.x - LOCATION[1]) ** 2 + (row.geometry.centroid.y - LOCATION[0]) ** 2), axis=1)
     max_distance = max(list(polys['location']))
     polys['location'] = polys.apply(lambda row: 1 - (row.location / max_distance), axis=1)
 
@@ -367,7 +381,7 @@ if __name__ == '__main__':
         # For testing
         graph = nx.complete_graph(NUM_NODES)
 
-        nx.set_node_attributes(graph, name='weight', values=int(TOTAL_NUM_REFUGEES/NUM_NODES))
+        nx.set_node_attributes(graph, name='weight', values=int(TOTAL_NUM_REFUGEES / NUM_NODES))
         nx.set_node_attributes(graph, name='num_conflicts', values=0)
         nx.set_node_attributes(graph, name='num_camps', values=1)
         nx.set_node_attributes(graph, name='location_score', values=0.5)
@@ -377,13 +391,13 @@ if __name__ == '__main__':
             print('Pre-processing graph data...')
             start = time.time()
             polys, points = preprocess()
-            print(f'Completed in {time.time() - start:2f}s...')
+            print(f'Completed in {time.time() - start:.2f}s...')
         else:
             # Option 2 - Build graph from preprocessed polys shapefile
             print('Loading graph data from file...')
             start = time.time()
             polys = gpd.read_file('./data/preprocessed_poly_data.shp')
-            print(f'Completed in {time.time() - start:2f}s...')
+            print(f'Completed in {time.time() - start:.2f}s...')
 
         graph = build_graph(polys)
 
@@ -396,7 +410,7 @@ if __name__ == '__main__':
     print('Creating sim...')
     start = time.time()
     sim = Sim(graph, NUM_STEPS)
-    print(f'Created sim in {time.time() - start:2f}s...')
+    print(f'Created sim in {time.time() - start:.2f}s...')
     start_node_weights = nx.get_node_attributes(graph, 'weight')
     sim.run()
     end_node_weights = nx.get_node_attributes(graph, 'weight')
