@@ -19,17 +19,26 @@ import matplotlib.pyplot as plt
 from multiprocessing.pool import Pool
 
 # CONSTANTS
+# For testing
+TEST = False
+NUM_NODES = 5
+TOTAL_NUM_REFUGEES = 500  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
-# Location of shapefiles to build graph from
+# For running against real data
+PREPROCESS = True
+
+# Location of data
 DATA_DIR = './data'
 
+# Whether to visualize the geographic network
+DRAW_GEO = False
+PRINT_NODE_WEIGHTS = False
 # Set number of simulation steps; 1 step = 1 day
 NUM_STEPS = 1
 
 # Number of friendships and kin to create
 NUM_FRIENDS = 1  # random.randint(1,3)
 NUM_KIN = 1  # random.randint(1,3)
-
 
 # Percentage of refugees that move if in a district with one or more refugee camps
 PERCENT_MOVE_AT_CAMP = 0.3
@@ -38,8 +47,8 @@ PERCENT_MOVE_AT_CONFLICT = 1
 # Percentage of refugees that move if in a district without a conflict event or a camp
 PERCENT_MOVE_AT_OTHER = 0.7
 
-# # Point to calculate western movement
-LONDON_COORDS = (51.5074, -0.1278)
+# Point to calculate western movement
+LOCATION = (51.5074, -0.1278)
 
 # Weight of # friends at node. (num friends * FRIEND_AT_NODE_WEIGHT)
 FRIEND_AT_NODE_WEIGHT = 0.5
@@ -166,8 +175,8 @@ class Sim(object):
         return new_refs, new_weights
 
     def step(self, step):
-        nx.get_node_attributes(graph, 'weight')
-        orig_weights = nx.get_node_attributes(graph, 'weight')
+        nx.get_node_attributes(self.graph, 'weight')
+        orig_weights = nx.get_node_attributes(self.graph, 'weight')
 
         # Update normalized node weights
         max_pop = max(orig_weights.values())
@@ -236,7 +245,7 @@ class Sim(object):
         print(f'Average step time: {step_time:2f}')
 
 
-def build_graph():
+def preprocess():
     # ***Data Engineering Using GeoPandas***
 
     # Get shapefile of Turkish districts (and re-project)
@@ -253,155 +262,99 @@ def build_graph():
     # pop_by_province = pop_by_province.to_crs({'init': 'epsg:4326'})
     # print(pop_by_province.crs)
 
-    # ***Create nodes***
-
-    nodes = []
-    # Remove non-english characters and fix duplicate district names ("Merkez")
+    # ** Remove non-english characters **
+    # ** fix duplicate district names ("Merkez") **
+    new_names = []  # for tracking nodes with same name. We will append index in dataframe if not unique
     for index, row in polys.iterrows():
         name = unidecode.unidecode(row.NAME_2)
         if name in "Merkez":
             name += " " + unidecode.unidecode(row.NAME_1)
-        if name in nodes:
+        if name in new_names:
             name += str(index)
-        nodes.append(name)
-        polys.at[index, "NAME_2"] = name
-        pop_by_province.at[index, "NAME_2"] = name  # Update name in population file
+        new_names.append(name)
+    polys["NAME_2"] = new_names
 
-    # ***Add Neighbors***
-
-    # Add column to store list of neighbors
-    polys["NEIGHBORS"] = None
-
-    # Calculate neighbors and create an edge in the network between each pair of districts that share a border
-    edges = []
-    for index, row in polys.iterrows():
-        neighbors = polys[polys.geometry.touches(row['geometry'])].NAME_2.tolist()
-        for n in neighbors:
-            edge = (row.NAME_2, n)
-            edge = sorted(edge)
-            edges.append(edge)
-        polys.at[index, "NEIGHBORS"] = ", ".join(neighbors)
-
-    # ***Add Population Data***
-
-    # Create new column in target shapefile for refugee population
-    polys["REFPOP"] = None
-
-    # Take refugee population by province, divide by number of districts in province, assign each equivalent value as REFPOP of district
+    # ** Add Population Data **
+    polys["REFPOP"] = 0
+    # Assign an equal portion of refs to each node in province
     for index, row in pop_by_province.iterrows():
-        REFPOP_calc = row['REFPOP'] / row['count']
-        # print(REFPOP_calc)
-        if not math.isnan(REFPOP_calc):
-            REFPOP_calc = int(REFPOP_calc)
-        polys.REFPOP.iloc[[polys.NAME_1 == row.NAME_1]] = REFPOP_calc
+        # print(row['REFPOP'], row['count'])
+        refs_at_node = row['REFPOP'] / row['count']
+        if math.isnan(refs_at_node):
+            refs_at_node = 0
+        polys.loc[polys.NAME_1 == row.NAME_1, 'REFPOP'] = int(refs_at_node)
 
-    # Set REFPOP to 0 for undefined districts
-    polys[['REFPOP']] = polys[['REFPOP']].fillna(value=0)
-
-    # Write out new shapefile with neighbors and population attributes
-    polys.to_file(os.path.join(DATA_DIR, "output_1.shp"))
-
-    # ***Create Additional Spatial Data Layers***
-
-    # Create Conflict data layer
+    # ** Add conflict data **
     # Read in ACLED event data from February 2019 (and set projection)
     df_conflict = pd.read_csv(os.path.join(DATA_DIR, 'FebACLEDextract.csv'))
-    conflict = gpd.GeoDataFrame(df_conflict, geometry=gpd.points_from_xy(df_conflict.longitude, df_conflict.latitude))
-    conflict.crs = {'init': 'epsg:4326'}
-    # print(conflict.crs)
-    # print(conflict.head())
-
-    # Plot events as points
-    base = polys.plot(color='white', edgecolor='black')
-    conflict.plot(ax=base, marker='o', color='red', markersize=5)
-
+    conflict = gpd.GeoDataFrame(df_conflict,
+                                geometry=gpd.points_from_xy(df_conflict.longitude, df_conflict.latitude),
+                                crs='epsg:4326')
+    # conflict.crs = 'epsg:4326'
     # Create new column in target shapefile for count of conflict events per district
     polys["conflict"] = polys.apply(lambda row: sum(conflict.within(row.geometry)), axis=1)
 
-    # print(polys.dtypes)
-    # print(polys.conflict)
-
-    # Write out test shapefile for verification in QGIS
-    # polys.to_file("test.shp")
-
-    # Plot conflict shapefile
-    # colors = 6
-    # figsize = (26, 20)
-    # cmap = 'Blues'
-    # conflict = polys.conflict
-    # conflict.plot(column=conflict, cmap=cmap, scheme='equal_interval', k=colors, legend=True, linewidth=10)
-    # plt.show()
-
+    # ** Add camps **
     # Read in refugee camp data (and re-project) from UNHCR Regional IM Working Group February 2019 (updated every 6 months)
     camps = gpd.read_file(os.path.join(DATA_DIR, 'tur_camps.shp'))
-    # print(camps.crs)
-    # print(camps)
-
-    # Plot camps as points
-    # base = polys.plot(color='white', edgecolor='black')
-    # camps.plot(ax=base, marker='o', color='blue', markersize=5)
-    # plt.show()
-
     # Create new column in target shapefile for refugee camps
-    polys["camps"] = polys.apply(lambda row: sum(camps.within(row.geometry)), axis=1)
+    polys["camp"] = polys.apply(lambda row: sum(camps.within(row.geometry)), axis=1)
 
-    # Write out test shapefile for verification in QGIS
-    # polys.to_file("secondtest.shp")
+    ## Add location score
+    # Calculate location score. Districts closest to specified location are scored highest.
+    polys['location'] = polys.apply(
+        lambda row: math.sqrt((row.geometry.centroid.x - LOCATION[1]) ** 2 + (row.geometry.centroid.y - LOCATION[0]) ** 2), axis=1)
+    max_distance = max(list(polys['location']))
+    polys['location'] = polys.apply(lambda row: 1 - (row.location / max_distance), axis=1)
 
-    # ***Create Nodes from District Polygons***
-
-    # Create centroids file (eventual nodes in the network)
+    ## Create centroids GPD
     points = polys.copy()
-
-    # Calculate centroids of polygons
     points['geometry'] = points['geometry'].centroid
 
-    # Calculate location score. Districts closest to London scored highest.
-    x1 = LONDON_COORDS[1]
-    y1 = LONDON_COORDS[0]
-    points['location_score'] = points.apply(
-        lambda row: math.sqrt((row.geometry.x - x1) ** 2 + (row.geometry.y - y1) ** 2), axis=1)
-    max_distance = max(list(points['location_score']))
-    points['location_score'] = points.apply(lambda row: 1 - (row.location_score / max_distance), axis=1)
+    # Write points to new Shapefile
+    points.to_file(os.path.join(DATA_DIR, 'preprocessed_data.shp'))
 
+    # Write polys to new Shapefile
+    polys.to_file(os.path.join(DATA_DIR, 'preprocessed_poly_data.shp'))
+
+    return polys, points
+
+
+def build_graph(data):
     # ***Network Creation using NetworkX***
     graph = nx.Graph()
 
+    if isinstance(data, str):
+        data = gpd.read_file(data)
+
     # ***Add Nodes to Graph***
     positions = {}
-    for index, row in points.iterrows():
+    for index, row in data.iterrows():
         node = row.NAME_2
         # Add the coordinates to the nodes so they can be displayed geospatially
-        coords = row.geometry
-        # weight_calc = row['REFPOP'] / polys['count']
-        # weight = weight_calc
-        weight = row.REFPOP
+        coords = row['geometry'].centroid
+        graph.add_node(node, pos=coords, weight=row.REFPOP,
+                       num_conflicts=row.conflict, num_camps=row.camp,
+                       location_score=row.location)
 
-        location_score = row.location_score
-
-        graph.add_node(node, pos=coords, weight=weight, num_conflicts=row.conflict, num_camps=row.camps,
-                       location_score=location_score, incoming_refs=[], outgoing_refs=[])
         positions[node] = (coords.x, coords.y)
 
-    # Write centroids to new Shapefile
-    points.to_file(os.path.join(DATA_DIR, 'output_2_centroids.shp'))
+        nx.set_node_attributes(graph, positions, 'position')
 
-    # ***Add Edges to Graph***
-    for edge in edges:
-        graph.add_edge(edge[0], edge[1], weight=1)
+        # ***Add Edges to Graph***
+        neighbors = data[data.geometry.touches(row['geometry'])].NAME_2.tolist()
+        for n in neighbors:
+            edge = (row.NAME_2, n)
+            edge = sorted(edge)
+            graph.add_edge(edge[0], edge[1], weight=1)
 
-    # ***Draw Graph***
-    # base = polys.plot(color='cadetblue', edgecolor='black')
-    # nx.draw(graph, node_size=25, node_color='darkblue', pos=positions)
-    # plt.show()
-
-    return graph, polys
+    return graph
 
 
-# def build_graph(geoDF):
-#
-#
-#     pass
+def draw(polys, graph):
+    polys.plot(color='cadetblue', edgecolor='black')
+    nx.draw(graph, node_size=25, node_color='darkblue', pos=nx.get_node_attributes(graph, 'position'))
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -409,14 +362,35 @@ if __name__ == '__main__':
     Program Execution starts here
     """
 
-    # graph, polys = build_graph()
+    if TEST:
+        print('Building test graph...')
+        # For testing
+        graph = nx.complete_graph(NUM_NODES)
 
-    graph = nx.complete_graph(500)
+        nx.set_node_attributes(graph, name='weight', values=int(TOTAL_NUM_REFUGEES/NUM_NODES))
+        nx.set_node_attributes(graph, name='num_conflicts', values=0)
+        nx.set_node_attributes(graph, name='num_camps', values=1)
+        nx.set_node_attributes(graph, name='location_score', values=0.5)
+    else:
+        if PREPROCESS:  # Run pre-processing
+            # Option 1 - Preprocess shapefiles
+            print('Pre-processing graph data...')
+            start = time.time()
+            polys, points = preprocess()
+            print(f'Completed in {time.time() - start:2f}s...')
+        else:
+            # Option 2 - Build graph from preprocessed polys shapefile
+            print('Loading graph data from file...')
+            start = time.time()
+            polys = gpd.read_file('./data/preprocessed_poly_data.shp')
+            print(f'Completed in {time.time() - start:2f}s...')
 
-    nx.set_node_attributes(graph, name='weight', values=500)
-    nx.set_node_attributes(graph, name='num_conflicts', values=0)
-    nx.set_node_attributes(graph, name='num_camps', values=1)
-    nx.set_node_attributes(graph, name='location_score', values=0.5)
+        graph = build_graph(polys)
+
+        # Draw graph
+        if DRAW_GEO:
+            print('Drawing graph...')
+            draw(polys, graph)
 
     # Run Sim
     print('Creating sim...')
@@ -427,9 +401,9 @@ if __name__ == '__main__':
     sim.run()
     end_node_weights = nx.get_node_attributes(graph, 'weight')
 
-    # print starting and ending node weights
-    # for node in graph.nodes:
-    #     print(node, start_node_weights[node], end_node_weights[node])
+    if PRINT_NODE_WEIGHTS:
+        for node in graph.nodes:
+            print(node, start_node_weights[node], end_node_weights[node])
 
     print("Total start weight:", sum(start_node_weights.values()))
     print("Total end weight:", sum(end_node_weights.values()))
