@@ -21,8 +21,8 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 # For testing
 TEST = False
-NUM_NODES = 5
-TOTAL_NUM_REFUGEES = 500  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+NUM_NODES = 3
+TOTAL_NUM_REFUGEES = 30  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
 # For running against real data
 PREPROCESS = False
@@ -61,10 +61,15 @@ FRIEND_WEIGHT = .25  # (num friends * KIN_WEIGHT)
 # Number of refugees that cross the Syrian-Turkish border at each time step
 SEED_REFS = 10
 # Districts that contain open border crossings during month of simulation start
-BORDER_CROSSING_LIST = []  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']  # [0, 1, 2, 3]
+BORDER_CROSSING_LIST = ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']  # [0, 1, 2, 3]
+
+# How many friend relationships to add per node
+NEW_FRIENDS_LOWER = 0
+NEW_FRIENDS_UPPER = 5
 
 # Number of chunks (processes) to split refugees into during a sim step
-NUM_CHUNKS = 4  # mp.cpu_count()
+# These dont necessarily have to be equal
+NUM_CHUNKS = NUM_PROCESSES = 4  # mp.cpu_count()
 
 
 class Ref(object):
@@ -140,10 +145,8 @@ class Sim(object):
         return most_desirable_neighbor
 
     def process_refs(self, refs):
-        print('Starting process...')
-
         new_refs = []
-        new_weights = {key: 0 for key in self.graph.nodes}
+        ref_nodes = {key: [] for key in self.graph.nodes}
 
         for x, ref in enumerate(refs):
             node = self.all_refugees[ref].node
@@ -151,32 +154,27 @@ class Sim(object):
             num_camps = self.graph.nodes[node]['num_camps']
 
             if num_conflicts > 0:
-                # Conflict zone - 1.0 move chance
+                # Conflict zone
                 move = True
-            elif num_camps:
-                # At a camp - 0.003 move chance
+            elif num_camps > 0:
+                # At a camp
                 move = random.random() < PERCENT_MOVE_AT_CAMP
             else:
-                # Neither camp nor conflict - 0.5 move chance
+                # Neither camp nor conflict
                 move = random.random() < PERCENT_MOVE_AT_OTHER
 
             new_refs.append(copy.deepcopy(self.all_refugees[ref]))
 
-            if not move:
-                continue
+            if move:
+                new_node = self.find_new_node(node, ref)
+                if new_node:
+                    new_refs[x].node = new_node
 
-            # Create a copy of refugee, assign new node attribute
-            new_node = self.find_new_node(node, ref)
-            if new_node is None:
-                continue
-            new_refs[x].node = new_node
-
-            # Update weight dict
-            new_weights[node] -= 1
-            new_weights[new_node] += 1
+            # Add ref to its new node
+            ref_nodes[new_refs[x].node].append(ref)
 
         # return new refugee list and node weight updates for these refs
-        return new_refs, new_weights
+        return new_refs, ref_nodes
 
     def step(self):
         nx.get_node_attributes(self.graph, 'weight')
@@ -195,7 +193,7 @@ class Sim(object):
 
         # Normalize conflicts
         num_conflicts = nx.get_node_attributes(self.graph, 'num_conflicts')
-        max_conflict = max(num_conflicts.values())
+        max_conflict = max(list(num_conflicts.values()) + [1])  # Add a max of 1 to prevent division by zero error
         num_conflicts = [x / max_conflict for x in num_conflicts.values()]
 
         # Update node score
@@ -209,33 +207,46 @@ class Sim(object):
 
         # Whether to process in parallel or synchronously
         if NUM_CHUNKS > 1:
-            print('Multiprocessing...')
+            print(f'Staring {NUM_PROCESSES} processes...')
             # Chunk refs and send to processes
             chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], NUM_CHUNKS)
-            results = Pool(NUM_CHUNKS).map(self.process_refs, chunked_refs)
+            results = Pool(NUM_PROCESSES).map(self.process_refs, chunked_refs)
         else:
             print('Not Multiprocessing')
             results = [self.process_refs([x for x in range(len(self.all_refugees))])]
 
-        print(len(results))
-        # print(results)
-
         self.all_refugees = []
-        new_weights = []
-        new_weights.append(orig_weights)
+        ref_nodes = []
         for result in results:
             self.all_refugees.extend(result[0])
-            new_weights.append(result[1])
+            ref_nodes.append(result[1])
 
-        # self.all_refugees = new_refs
-
-        new_weights = pd.DataFrame(new_weights)
-
-        new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
-
+        print('Updating node refugee lists and counts...')
+        # Update node refugee lists (contains the indices of refugees at node)
+        ref_nodes = pd.DataFrame(ref_nodes)
+        ref_nodes = dict(zip(self.graph.nodes, list(ref_nodes.sum())))
+        new_weights = [len(x) for x in ref_nodes.values()]
+        # Update node weights
+        new_weights = dict(zip(self.graph.nodes, new_weights))
         nx.set_node_attributes(self.graph, new_weights, 'weight')
 
-        # seed border crossing nodes with new refugees
+        print("Adding friendships at camps...")
+        # Randomly create friendships between refs at same node
+        new_friendships = 0
+        for node in self.graph.nodes():
+            if self.graph.nodes[node]['num_camps'] > 0:
+                num_new_rels = random.randint(NEW_FRIENDS_LOWER, NEW_FRIENDS_UPPER)
+                for x in range(num_new_rels):
+                    ref1 = random.choice(ref_nodes[node])
+                    ref2 = ref1
+                    while ref2 == ref1:
+                        ref2 = random.choice(ref_nodes[node])
+                    new_friendships += 1
+                    self.all_refugees[ref1].friend_list[ref2] = 1
+                    self.all_refugees[ref2].friend_list[ref1] = 1
+        print(f'Added {new_friendships} friendships at camps...')
+
+        print('Seeding network at border crossings...')
         new_ref_index = self.num_refugees
         self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
         for node in BORDER_CROSSING_LIST:
@@ -250,7 +261,7 @@ class Sim(object):
         avg_step_time = 0
         for x in list(range(self.num_steps)):
             start = time.time()
-            print(f'Starting step {x + 1}')
+            print(f'Starting step {x + 1}...')
             self.step()
             step_time = time.time() - start
             avg_step_time += step_time
@@ -382,9 +393,9 @@ if __name__ == '__main__':
         graph = nx.complete_graph(NUM_NODES)
 
         nx.set_node_attributes(graph, name='weight', values=int(TOTAL_NUM_REFUGEES / NUM_NODES))
-        nx.set_node_attributes(graph, name='num_conflicts', values=0)
-        nx.set_node_attributes(graph, name='num_camps', values=1)
-        nx.set_node_attributes(graph, name='location_score', values=0.5)
+        nx.set_node_attributes(graph, name='num_conflicts', values=0)  # todo - can make this random
+        nx.set_node_attributes(graph, name='num_camps', values=1)  # todo - can make this random
+        nx.set_node_attributes(graph, name='location_score', values=0.5)  # todo - can make this random
     else:
         if PREPROCESS:  # Run pre-processing
             # Option 1 - Preprocess shapefiles
@@ -411,10 +422,10 @@ if __name__ == '__main__':
     start = time.time()
     sim = Sim(graph, NUM_STEPS)
     print(f'Created sim in {time.time() - start:.2f}s...')
+
     start_node_weights = nx.get_node_attributes(graph, 'weight')
     sim.run()
     end_node_weights = nx.get_node_attributes(graph, 'weight')
-
     if PRINT_NODE_WEIGHTS:
         for node in graph.nodes:
             print(node, start_node_weights[node], end_node_weights[node])
