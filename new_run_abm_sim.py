@@ -408,12 +408,12 @@ def time_trial(graph, output_file='results.csv', num_steps=10, num_processes=[1]
         writer = csv.writer(fp)
         writer.writerow(['STEPS', 'PROCESSES', 'BATCHES', 'TIME_(S)'])
         for n_process in num_processes:
-            for n_batch in num_batches:
-                sim = Sim(graph, num_steps, n_process, n_process)
-                avg_step_time = sim.run()
+#             for n_batch in num_batches:
+            sim = Sim(graph, num_steps, n_process, n_process)
+            avg_step_time = sim.run()
 
-                writer.writerow([num_steps, n_process, n_process, avg_step_time])
-                fp.flush()
+            writer.writerow([num_steps, n_process, n_process, avg_step_time])
+            fp.flush()
 
 
 if __name__ == '__main__':
@@ -453,10 +453,11 @@ if __name__ == '__main__':
 
     if TIME_TRIAL:
 
-        processes = [1, 2, 4]  # , 4, 8, 12, 16]
+        num_steps = 5
+        processes = [1, 2, 4, 8, 16]  # , 4, 8, 12, 16]
         chunks = [1]  # , 4, 8, 12, 16]
 
-        time_trial(graph, num_processes=processes, num_batches=chunks)
+        time_trial(graph, num_steps=num_steps, num_processes=processes, num_batches=chunks)
         sys.exit()
 
     # Run Sim
