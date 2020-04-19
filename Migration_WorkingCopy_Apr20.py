@@ -28,17 +28,18 @@ PERCENT_MOVE_AT_OTHER = 0.7
 # Number of refugees that cross the Syrian-Turkish border at each time step
 SEED_REFS = 10
 
-NUM_FRIENDS = 2  # random.randint(1,3)
+NUM_FRIENDS = 1  # random.randint(1,3)
 NUM_KIN = 1  # random.randint(1,3)
 
 # Districts that contain open border crossings during month of simulation start
-BORDER_CROSSING_LIST = ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']
+BORDER_CROSSING_LIST = []  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']
 # # Point to calculate western movement
 LONDON_COORDS = (51.5074, -0.1278)
 
-NUM_CHUNKS = 4  # mp.cpu_count()
+NUM_CHUNKS = 1  # mp.cpu_count()
 
 DATA_DIR = './data'
+
 
 class Ref(object):
     """
@@ -52,8 +53,8 @@ class Ref(object):
     def create_social_links(self, index, sim):
         # create kin
         for x in range(NUM_KIN):
-            kin = x
-            while kin != x:
+            kin = index
+            while kin != index:
                 kin = random.randint(0, sim.num_refugees)
             # establish kin list
             self.kin_list[kin] = 1
@@ -62,13 +63,14 @@ class Ref(object):
 
         # create friends
         for x in range(NUM_FRIENDS):
-            friend = x
-            while friend != x:
+            friend = index
+            while friend != index:
                 friend = random.randint(0, sim.num_refugees)
             # establish friend list
             self.friend_list[friend] = 1
             # make links reciprocal
             sim.all_refugees[friend].friend_list[index] = 1
+
 
 class Sim(object):
     """
@@ -105,7 +107,7 @@ class Sim(object):
         # for each kin, get node location
         kin_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].kin_list]
         # for each friend, get node location
-        friend_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].kin_list]
+        friend_nodes = [self.all_refugees[friend].node for friend in self.all_refugees[ref].friend_list]
 
         # calculate neighbor with highest population
         for n in neighbors:
@@ -170,35 +172,43 @@ class Sim(object):
         orig_weights = nx.get_node_attributes(graph, 'weight')
 
         self.max_pop = max(orig_weights.values())
-        # split refugees into groups for multiprocessing
-        chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], NUM_CHUNKS)
-        print('Multiprocessing...')
-        results = Pool(NUM_CHUNKS).map(self.process_refs, chunked_refs)
+        start = time.time()
+        if NUM_CHUNKS > 1:
+            print('Multiprocessing...')
+            chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], NUM_CHUNKS)
+            pool = Pool(NUM_CHUNKS)
+            results = pool.map(self.process_refs, chunked_refs)
+            pool.close()
+            pool.join()
+        else:
+            print('Not Multiprocessing')
+            results = [self.process_refs([x for x in range(len(self.all_refugees))])]
 
-        self.all_refugees = []
-        new_weights = []
-        new_weights.append(orig_weights)
-        for result in results:
-            self.all_refugees.extend(result[0])
-            new_weights.append(result[1])
-
-        # self.all_refugees = new_refs
-
-        new_weights = pd.DataFrame(new_weights)
-
-        new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
-
-        nx.set_node_attributes(self.graph, new_weights, 'weight')
-
-        # seed border crossing nodes with new refugees
-        new_ref_index = self.num_refugees
-        self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
-        for node in BORDER_CROSSING_LIST:
-            self.graph.nodes[node]['weight'] += SEED_REFS
-            self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, SEED_REFS)])
-
-        for index in range(new_ref_index, self.num_refugees):
-            self.all_refugees[index].create_social_links(index, self)
+        print('time to process -', time.time() - start)
+        # self.all_refugees = []
+        # new_weights = []
+        # new_weights.append(orig_weights)
+        # for result in results:
+        #     self.all_refugees.extend(result[0])
+        #     new_weights.append(result[1])
+        #
+        # # self.all_refugees = new_refs
+        #
+        # new_weights = pd.DataFrame(new_weights)
+        #
+        # new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
+        #
+        # nx.set_node_attributes(self.graph, new_weights, 'weight')
+        #
+        # # seed border crossing nodes with new refugees
+        # new_ref_index = self.num_refugees
+        # self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
+        # for node in BORDER_CROSSING_LIST:
+        #     self.graph.nodes[node]['weight'] += SEED_REFS
+        #     self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, SEED_REFS)])
+        #
+        # for index in range(new_ref_index, self.num_refugees):
+        #     self.all_refugees[index].create_social_links(index, self)
 
     def run(self):
         # Add status bar for simulation run

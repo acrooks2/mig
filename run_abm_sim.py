@@ -42,8 +42,8 @@ PRINT_NODE_WEIGHTS = False
 NUM_STEPS = 1
 
 # Number of friendships and kin to create
-NUM_FRIENDS = 2  # random.randint(1,3)
-NUM_KIN = 2  # random.randint(1,3)
+NUM_FRIENDS = 1  # random.randint(1,3)
+NUM_KIN = 1  # random.randint(1,3)
 
 # Percentage of refugees that move if in a district with one or more refugee camps
 PERCENT_MOVE_AT_CAMP = 0.3
@@ -224,11 +224,11 @@ class Sim(object):
             results = pool.map(self.process_refs, chunked_refs)
             pool.close()
             pool.join()
-
         else:
             print('Not Multiprocessing')
             results = [self.process_refs([x for x in range(len(self.all_refugees))])]
 
+        print('Gathering results...')
         self.all_refugees = []
         ref_nodes = []
         for result in results:
