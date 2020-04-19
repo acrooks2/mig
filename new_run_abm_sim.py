@@ -18,16 +18,16 @@ import pandas as pd
 import networkx as nx
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from functools import partial
 from multiprocessing.pool import Pool
 # CONSTANTS
 # For testing
 TEST = False  # True
 NUM_NODES = 100
 AVG__PHYSICAL_CONNECTIONS = 5
-TOTAL_NUM_REFUGEES = 1000000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+TOTAL_NUM_REFUGEES = 100000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
-# For timing different num processes
-TIME_TRIAL = False
+TIME_TRIAL = True
 # For running against real data
 PREPROCESS = False
 
@@ -42,8 +42,8 @@ PRINT_NODE_WEIGHTS = False
 NUM_STEPS = 1
 
 # Number of friendships and kin to create
-NUM_FRIENDS = 2  # random.randint(1,3)
-NUM_KIN = 2  # random.randint(1,3)
+NUM_FRIENDS = 1  # random.randint(1,3)
+NUM_KIN = 1  # random.randint(1,3)
 
 # Percentage of refugees that move if in a district with one or more refugee camps
 PERCENT_MOVE_AT_CAMP = 0.3
@@ -76,6 +76,68 @@ NEW_FRIENDS_UPPER = 5
 # These dont necessarily have to be equal
 NUM_CHUNKS = 4
 NUM_PROCESSES = 4  # mp.cpu_count()
+
+
+def find_new_node(sim, node, ref):
+    # find neighbor with highest weight
+    neighbors = list(sim.graph.neighbors(node))
+
+    # initialize max node value to negative number
+    most_desirable_score = -99
+    most_desirable_neighbor = None
+
+    # check to see if there are neighbors (in case node is isolate)
+    if len(neighbors) == 0:
+        # print(ref_pop, "refugees can't move from isolates", node)
+        return
+
+    kin_nodes = [sim.all_refugees[kin].node for kin in sim.all_refugees[ref].kin_list]
+    friend_nodes = [sim.all_refugees[friend].node for friend in sim.all_refugees[ref].friend_list]
+
+    # calculate neighbor with highest population
+    for n in neighbors:
+        kin_at_node = kin_nodes.count(n)
+        friends_at_node = friend_nodes.count(n)
+        desirability = (kin_at_node * KIN_WEIGHT) + (friends_at_node * FRIEND_WEIGHT) + sim.graph.nodes[n][
+            'node_score']  # + self.graph.nodes[n]['']
+        if desirability > most_desirable_score:
+            most_desirable_score = desirability
+            most_desirable_neighbor = n
+
+    return most_desirable_neighbor
+
+
+def process_refs(refs, sim):
+    new_refs = []
+    ref_nodes = {key: [] for key in sim.graph.nodes}
+
+    for x, ref in enumerate(refs):
+        node = sim.all_refugees[ref].node
+        num_conflicts = sim.graph.nodes[node]['num_conflicts']
+        num_camps = sim.graph.nodes[node]['num_camps']
+
+        if num_conflicts > 0:
+            # Conflict zone
+            move = True
+        elif num_camps > 0:
+            # At a camp
+            move = random.random() < PERCENT_MOVE_AT_CAMP
+        else:
+            # Neither camp nor conflict
+            move = random.random() < PERCENT_MOVE_AT_OTHER
+
+        new_refs.append(copy.deepcopy(sim.all_refugees[ref]))
+
+        if move:
+            new_node = find_new_node(sim, node, ref)
+            if new_node:
+                new_refs[x].node = new_node
+
+        # Add ref to its new node
+        ref_nodes[new_refs[x].node].append(ref)
+
+    # return new refugee list and node weight updates for these refs
+    return new_refs, ref_nodes
 
 
 class Ref(object):
@@ -125,65 +187,6 @@ class Sim(object):
         for index, ref in enumerate(self.all_refugees):
             ref.create_social_links(index, self)
 
-    def find_new_node(self, node, ref):
-        # find neighbor with highest weight
-        neighbors = list(self.graph.neighbors(node))
-
-        # initialize max node value to negative number
-        most_desirable_score = -99
-        most_desirable_neighbor = None
-
-        # check to see if there are neighbors (in case node is isolate)
-        if len(neighbors) == 0:
-            # print(ref_pop, "refugees can't move from isolates", node)
-            return
-
-        kin_nodes = [self.all_refugees[kin].node for kin in self.all_refugees[ref].kin_list]
-        friend_nodes = [self.all_refugees[friend].node for friend in self.all_refugees[ref].friend_list]
-
-        # calculate neighbor with highest population
-        for n in neighbors:
-            kin_at_node = kin_nodes.count(n)
-            friends_at_node = friend_nodes.count(n)
-            desirability = (kin_at_node * KIN_WEIGHT) + (friends_at_node * FRIEND_WEIGHT) + self.graph.nodes[n]['node_score']  # + self.graph.nodes[n]['']
-            if desirability > most_desirable_score:
-                most_desirable_score = desirability
-                most_desirable_neighbor = n
-
-        return most_desirable_neighbor
-
-    def process_refs(self, refs):
-        new_refs = []
-        ref_nodes = {key: [] for key in self.graph.nodes}
-
-        for x, ref in enumerate(refs):
-            node = self.all_refugees[ref].node
-            num_conflicts = self.graph.nodes[node]['num_conflicts']
-            num_camps = self.graph.nodes[node]['num_camps']
-
-            if num_conflicts > 0:
-                # Conflict zone
-                move = True
-            elif num_camps > 0:
-                # At a camp
-                move = random.random() < PERCENT_MOVE_AT_CAMP
-            else:
-                # Neither camp nor conflict
-                move = random.random() < PERCENT_MOVE_AT_OTHER
-
-            new_refs.append(copy.deepcopy(self.all_refugees[ref]))
-
-            if move:
-                new_node = self.find_new_node(node, ref)
-                if new_node:
-                    new_refs[x].node = new_node
-
-            # Add ref to its new node
-            ref_nodes[new_refs[x].node].append(ref)
-
-        # return new refugee list and node weight updates for these refs
-        return new_refs, ref_nodes
-
     def step(self):
         nx.get_node_attributes(self.graph, 'weight')
         orig_weights = nx.get_node_attributes(self.graph, 'weight')
@@ -214,20 +217,20 @@ class Sim(object):
         nx.set_node_attributes(self.graph, node_scores, 'node_score')
 
         # Whether to process in parallel or synchronously
-        if self.num_processes > 1:
+        if self.num_processes > 0:
             print(f'Staring {self.num_processes} processes...')
             # Chunk refs and send to processes
             chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], self.num_chunks)
-
+            partial_pr = partial(process_refs, sim=copy.deepcopy(self))
             pool = Pool(self.num_processes)
 
-            results = pool.map(self.process_refs, chunked_refs)
+            results = pool.map(partial_pr, chunked_refs)
             pool.close()
             pool.join()
 
         else:
             print('Not Multiprocessing')
-            results = [self.process_refs([x for x in range(len(self.all_refugees))])]
+            results = [process_refs([x for x in range(len(self.all_refugees))], sim)]
 
         self.all_refugees = []
         ref_nodes = []
@@ -406,10 +409,10 @@ def time_trial(graph, output_file='results.csv', num_steps=10, num_processes=[1]
         writer.writerow(['STEPS', 'PROCESSES', 'BATCHES', 'TIME_(S)'])
         for n_process in num_processes:
             for n_batch in num_batches:
-                sim = Sim(graph, num_steps, n_process, n_batch)
+                sim = Sim(graph, num_steps, n_process, n_process)
                 avg_step_time = sim.run()
 
-                writer.writerow([num_steps, n_process, n_batch, avg_step_time])
+                writer.writerow([num_steps, n_process, n_process, avg_step_time])
                 fp.flush()
 
 
@@ -424,7 +427,7 @@ if __name__ == '__main__':
         graph = nx.fast_gnp_random_graph(NUM_NODES, float(AVG__PHYSICAL_CONNECTIONS) / NUM_NODES)
 
         nx.set_node_attributes(graph, name='weight', values=int(TOTAL_NUM_REFUGEES / NUM_NODES))
-        nx.set_node_attributes(graph, name='num_conflicts', values=0)  # todo - can make this random
+        nx.set_node_attributes(graph, name='num_conflicts', values=1)  # todo - can make this random
         nx.set_node_attributes(graph, name='num_camps', values=0)  # todo - can make this random
         nx.set_node_attributes(graph, name='location_score', values=0.5)  # todo - can make this random
     else:
@@ -450,7 +453,7 @@ if __name__ == '__main__':
 
     if TIME_TRIAL:
 
-        processes = [1]  # , 4, 8, 12, 16]
+        processes = [1, 2, 4]  # , 4, 8, 12, 16]
         chunks = [1]  # , 4, 8, 12, 16]
 
         time_trial(graph, num_processes=processes, num_batches=chunks)
