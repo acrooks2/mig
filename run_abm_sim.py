@@ -19,6 +19,7 @@ import networkx as nx
 import geopandas as gpd
 import matplotlib.pyplot as plt
 from multiprocessing.pool import Pool
+
 # CONSTANTS
 # For testing
 TEST = False  # True
@@ -27,8 +28,9 @@ AVG__PHYSICAL_CONNECTIONS = 5
 TOTAL_NUM_REFUGEES = 1000000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
 # For timing different num processes
-TIME_TRIAL = True
-# For running against real data
+TIME_TRIAL = False
+
+# Whether to pre-process the data
 PREPROCESS = False
 
 # Location of data
@@ -66,7 +68,7 @@ FRIEND_WEIGHT = .25  # (num friends * KIN_WEIGHT)
 # Number of refugees that cross the Syrian-Turkish border at each time step
 SEED_REFS = 10
 # Districts that contain open border crossings during month of simulation start
-BORDER_CROSSING_LIST = []  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']  # [0, 1, 2, 3]
+BORDER_CROSSING_LIST = ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']  # [0, 1, 2, 3]
 
 # How many friend relationships to add per node
 NEW_FRIENDS_LOWER = 0
@@ -75,7 +77,7 @@ NEW_FRIENDS_UPPER = 5
 # Number of chunks (processes) to split refugees into during a sim step
 # These dont necessarily have to be equal
 NUM_CHUNKS = 4
-NUM_PROCESSES = 1  # mp.cpu_count()
+NUM_PROCESSES = 4  # mp.cpu_count()
 
 
 class Ref(object):
