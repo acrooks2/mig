@@ -22,14 +22,15 @@ from functools import partial
 from multiprocessing.pool import Pool
 # CONSTANTS
 # For testing
-TEST = False  # True
-NUM_NODES = 100
+TEST = True  # True
+NUM_NODES = 5
 AVG__PHYSICAL_CONNECTIONS = 5
 TOTAL_NUM_REFUGEES = 100000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
 TIME_TRIAL = False
 # For running against real data
 PREPROCESS = False
+VALIDATE = False
 
 # Location of data
 DATA_DIR = './data'
@@ -42,8 +43,8 @@ PRINT_NODE_WEIGHTS = False
 NUM_STEPS = 1
 
 # Number of friendships and kin to create
-NUM_FRIENDS = 1  # random.randint(1,3)
-NUM_KIN = 1  # random.randint(1,3)
+NUM_FRIENDS = 1  # int for defined number. Tuple (low, high) for random number of friends
+NUM_KIN = 1  # int for defined number. Tuple (low, high) for random number of friends
 
 # Percentage of refugees that move if in a district with one or more refugee camps
 PERCENT_MOVE_AT_CAMP = 0.3
@@ -64,18 +65,14 @@ KIN_WEIGHT = .25  # (num kin * FRIEND_WEIGHT)
 FRIEND_WEIGHT = .25  # (num friends * KIN_WEIGHT)
 
 # Number of refugees that cross the Syrian-Turkish border at each time step
-SEED_REFS = 10
+SEED_REFS = 0  # If this is 0, seeding will not occur
 # Districts that contain open border crossings during month of simulation start
-BORDER_CROSSING_LIST = []  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']  # [0, 1, 2, 3]
-
-# How many friend relationships to add per node
-NEW_FRIENDS_LOWER = 0
-NEW_FRIENDS_UPPER = 5
+BORDER_CROSSING_LIST = ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']  # [0, 1, 2, 3]
 
 # Number of chunks (processes) to split refugees into during a sim step
 # These dont necessarily have to be equal
-NUM_CHUNKS = 2
-NUM_PROCESSES = 2  # mp.cpu_count()
+NUM_BATCHES = 4
+NUM_PROCESSES = 4  # mp.cpu_count()
 
 
 def find_new_node(sim, node, ref):
@@ -152,7 +149,7 @@ class Ref(object):
         self.kin_list = {}
         self.friend_list = {}
 
-    def create_social_links(self, index, sim):
+    def create_defined_social_links(self, index, sim):
         # create kin
         for x in range(NUM_KIN):
             kin = index
@@ -171,23 +168,47 @@ class Ref(object):
             # set for other friend
             sim.all_refugees[friend].friend_list[index] = 1
 
+    def create_random_social_links(self, index, sim):
+        # create kin
+        for x in range(random.randint(NUM_KIN[0], NUM_KIN[1])):
+            kin = index
+            while kin == index:
+                kin = random.randint(0, sim.num_refugees - 1)
+            self.kin_list[kin] = 1
+            # set for other kin
+            sim.all_refugees[kin].kin_list[index] = 1
+
+        # create friends
+        for x in range(random.randint(NUM_FRIENDS[0], NUM_FRIENDS[1])):
+            friend = index
+            while friend == index:
+                friend = random.randint(0, sim.num_refugees - 1)
+            self.friend_list[friend] = 1
+            # set for other friend
+            sim.all_refugees[friend].friend_list[index] = 1
+
 
 class Sim(object):
     """
     Class representative of the simulation
     """
 
-    def __init__(self, graph, num_steps=10, num_processes=1, num_chunks=1):
+    def __init__(self, graph, num_steps=10, num_processes=1, num_batches=1):
         self.graph = graph
         self.num_steps = num_steps
         self.num_processes = num_processes
-        self.num_chunks = num_chunks
+        self.num_batches = num_batches
         self.num_refugees = sum([self.graph.nodes[n]['weight'] for n in self.graph.nodes])
         self.all_refugees = []
         for node in self.graph.nodes():
             self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(self.graph.nodes[node]['weight'])])
-        for index, ref in enumerate(self.all_refugees):
-            ref.create_social_links(index, self)
+
+        if isinstance(NUM_FRIENDS, int):
+            for index, ref in enumerate(self.all_refugees):
+                ref.create_defined_social_links(index, self)
+        else:
+            for index, ref in enumerate(self.all_refugees):
+                ref.create_random_social_links(index, self)
 
     def step(self):
         nx.get_node_attributes(self.graph, 'weight')
@@ -222,61 +243,39 @@ class Sim(object):
         if self.num_processes > 1:
             print(f'Staring {self.num_processes} processes...')
             # Chunk refs and send to processes
-            chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], self.num_chunks)
+            chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], self.num_batches)
             partial_pr = partial(process_refs, sim=self)
             pool = Pool(self.num_processes)
 
             results = pool.map(partial_pr, chunked_refs)
             pool.close()
             pool.join()
-
         else:
             print('Not Multiprocessing')
             results = [process_refs([x for x in range(len(self.all_refugees))], sim)]
 
         self.all_refugees = []
-        new_weights = []
-        new_weights.append(orig_weights)
+        new_weights = [orig_weights]
         for result in results:
             self.all_refugees.extend(result[0])
             new_weights.append(result[1])
 
-        # self.all_refugees = new_refs
-
         new_weights = pd.DataFrame(new_weights)
-
         new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
-
         nx.set_node_attributes(self.graph, new_weights, 'weight')
 
-        # print("Adding friendships at camps...")
-        # # Randomly create friendships between refs at same node
-        # new_friendships = 0
-        # for node in self.graph.nodes():
-        #     if self.graph.nodes[node]['num_camps'] > 0:
-        #         num_new_rels = random.randint(NEW_FRIENDS_LOWER, NEW_FRIENDS_UPPER)
-        #         for x in range(num_new_rels):
-        #             ref1 = random.choice(ref_nodes[node])
-        #             ref2 = ref1
-        #             while ref2 == ref1:
-        #                 ref2 = random.choice(ref_nodes[node])
-        #             new_friendships += 1
-        #             self.all_refugees[ref1].friend_list[ref2] = 1
-        #             self.all_refugees[ref2].friend_list[ref1] = 1
-        # print(f'Added {new_friendships} friendships at camps...')
+        if SEED_REFS > 0:
+            print('Seeding network at border crossings...')
+            new_ref_index = self.num_refugees
+            self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
+            for node in BORDER_CROSSING_LIST:
+                self.graph.nodes[node]['weight'] += SEED_REFS
+                self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, SEED_REFS)])
 
-        print('Seeding network at border crossings...')
-        new_ref_index = self.num_refugees
-        self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
-        for node in BORDER_CROSSING_LIST:
-            self.graph.nodes[node]['weight'] += SEED_REFS
-            self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, SEED_REFS)])
-
-        for index in range(new_ref_index, self.num_refugees):
-            self.all_refugees[index].create_social_links(index, self)
+            for index in range(new_ref_index, self.num_refugees):
+                self.all_refugees[index].create_social_links(index, self)
 
     def run(self):
-        # Add status bar for simulation run
         avg_step_time = 0
         for x in list(range(self.num_steps)):
             start = time.time()
@@ -365,7 +364,7 @@ def preprocess():
     # Write polys to new Shapefile
     polys.to_file(os.path.join(DATA_DIR, 'preprocessed_poly_data.shp'))
 
-    return polys, points
+    return polys, points, pop_by_province
 
 
 def build_graph(data):
@@ -437,7 +436,7 @@ if __name__ == '__main__':
             # Option 1 - Preprocess shapefiles
             print('Pre-processing graph data...')
             start = time.time()
-            polys, points = preprocess()
+            polys, points, pop_by_province = preprocess()
             print(f'Completed in {time.time() - start:.2f}s...')
         else:
             # Option 2 - Build graph from preprocessed polys shapefile
@@ -465,7 +464,7 @@ if __name__ == '__main__':
     # Run Sim
     print('Creating sim...')
     start = time.time()
-    sim = Sim(graph, NUM_STEPS, NUM_PROCESSES, NUM_CHUNKS)
+    sim = Sim(graph, NUM_STEPS, NUM_PROCESSES, NUM_BATCHES)
     print(f'Created sim in {time.time() - start:.2f}s...')
 
     start_node_weights = nx.get_node_attributes(graph, 'weight')
@@ -478,76 +477,56 @@ if __name__ == '__main__':
     print("Total start weight:", sum(start_node_weights.values()))
     print("Total end weight:", sum(end_node_weights.values()))
 
+    # Write out to shapefile
+    polys['simEnd'] = polys['NAME_2'].map(end_node_weights)
+    polys.to_file(os.path.join(DATA_DIR, 'simOutput.shp'))
 
-def stop():
-    # Write end_node_weights to final_REFPOP column in shapefile
-    output = gpd.read_file(os.path.join(DATA_DIR, 'output_1.shp'))
+    if VALIDATE:
+        ## MODEL VALIDATION ##
+        val = gpd.read_file(os.path.join(DATA_DIR, 'gadm36_TUR_1_val.shp'))
+        pop_by_province = gpd.read_file(os.path.join(DATA_DIR, 'REFPOP.shp'))
+        # sim_val = gpd.read_file(r"C:\Users\mrich\OneDrive\GMU\Summer 2019 Comp Migration\output_3_simOutput.shp")
 
-    output['simEnd'] = output['NAME_1'].map(end_node_weights)
-    # output['simEnd'] = end_node_weights.values()
+        # Remove non-english characters and fix duplicate district names ("Merkez")
+        for index, row in val.iterrows():
+            name = unidecode.unidecode(row.NAME_1)
+            val.at[index, "NAME_1"] = name
 
-    # write out to shapefile
-    output.to_file(os.path.join(DATA_DIR, 'output_3_simOutput.shp'))
+        # Take refugee population by province, divide by number of districts in province, assign each equivalent value as REFPOP of district
+        polys['valPop'] = 0
+        for index, row in val.iterrows():
+            # print(type(row['val_mar19']))
+            # print(type(polys_val.loc[index].count))
 
-    # visualize simulation output
-    # output = gpd.read_file(r"C:\Users\mrich\OneDrive\GMU\Summer 2019 Comp Migration\output_3_simOutput.shp")
-    # colors = 6
-    # figsize = (26, 20)
-    # cmap = 'winter_r'
-    # simEnd = output.simEnd
-    # output.plot(column=simEnd, cmap=cmap, scheme='equal_interval', k=colors, legend=True, linewidth=10)
+            val_calc = row['val_mar19'] / float(pop_by_province.loc[index]['count'])
+            # print(polys.NAME_1)
+            if not math.isnan(val_calc):
+                val_calc = int(val_calc)
 
-    ## MODEL VALIDATION ##
-    val = gpd.read_file(os.path.join(DATA_DIR, 'gadm36_TUR_1_val.shp'))
-    polys = gpd.read_file(os.path.join(DATA_DIR, 'REFPOP.shp'))
-    # sim_val = gpd.read_file(r"C:\Users\mrich\OneDrive\GMU\Summer 2019 Comp Migration\output_3_simOutput.shp")
+                polys.valPop.iloc[[polys.NAME_1 == row.NAME_1]] = val_calc
 
-    # Remove non-english characters and fix duplicate district names ("Merkez")
-    for index, row in val.iterrows():
-        name = unidecode.unidecode(row.NAME_1)
-        val.at[index, "NAME_1"] = name
+        # Normalize both actual and predicted REFPOP for district-level comparison
+        minPop = min(polys.valPop)
+        maxPop = max(polys.valPop)
+        polys['valPopNorm'] = (polys['valPop'] - minPop) / (maxPop - minPop)
+        minPop = min(polys.simEnd)
+        maxPop = max(polys.simEnd)
+        polys['simEnd_norm'] = (polys['simEnd'] - minPop) / (maxPop - minPop)
+        # print(polys.simEnd_norm)
 
-    # Take refugee population by province, divide by number of districts in province, assign each equivalent value as REFPOP of district
-    for index, row in val.iterrows():
-        # print(type(row['val_mar19']))
-        # print(type(polys_val.loc[index].count))
-        val_calc = row['val_mar19'] / float(polys.loc[index]['count'])
-        if not math.isnan(val_calc):
-            val_calc = int(val_calc)
-        polys.REFPOP.iloc[[polys.NAME_1 == row.NAME_1]] = val_calc
+        # Comparative scaled_actual & scale_predicted
+        polys['accuracy'] = (polys.simEnd_norm - polys.valPopNorm)
 
-    # Write out new shapefile with refugee validation population by district
-    val.to_file(os.path.join(DATA_DIR, 'output_4.shp'))
+        # Write out new shapefile with validation accuracy by district
+        polys.to_file(os.path.join(DATA_DIR, 'validationResults.shp'))
 
-    # C reate new colums for normalized values and comparison
-    val["val_mar19_norm"] = None
-    output["simEnd_norm"] = None
-    output["accuracy"] = None
+        # visualize validation output - unnecessary to read again
+        # validation = gpd.read_file(os.path.join(DATA_DIR, 'output_5_validation.shp'))
+        colors = 6
+        figsize = (26, 20)
+        cmap = 'winter_r'
+        accuracy = polys.accuracy
+        polys.plot(column=accuracy, cmap=cmap, scheme='equal_interval', k=colors, legend=True, linewidth=10)
 
-    # Normalize both actual and predicted REFPOP for district-level comparison
-    print(max(val.val_mar19))
-    print(min(val.val_mar19))
-    val['val_mar19_norm'] = ((val.val_mar19) - min((val.val_mar19))) / (max((val.val_mar19)) - min((val.val_mar19)))
-    print(val.val_mar19_norm)
-
-    print(max(output.simEnd))
-    print(min(output.simEnd))
-    output['simEnd_norm'] = ((output.simEnd) - min(output.simEnd)) / ((max(output.simEnd)) - min(output.simEnd))
-    print(output.simEnd_norm)
-
-    # Comparative scaled_actual & scale_predicted
-    output['accuracy'] = (output.simEnd_norm - val.val_mar19_norm)
-
-    # Write out new shapefile with validation accuracy by district
-    output.to_file(os.path.join(DATA_DIR, 'output_5_validation.shp'))
-
-    # visualize validation output - unnecessary to read again
-    validation = gpd.read_file(os.path.join(DATA_DIR, 'output_5_validation.shp'))
-    colors = 6
-    figsize = (26, 20)
-    cmap = 'winter_r'
-    accuracy = validation.accuracy
-    validation.plot(column=accuracy, cmap=cmap, scheme='equal_interval', k=colors, legend=True, linewidth=10)
-
-    # SHOW PLOTS
-    plt.show()
+        # SHOW PLOTS
+        plt.show()
