@@ -23,15 +23,15 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 # For testing
 TEST = False  # True
-NUM_NODES = 4
-AVG__PHYSICAL_CONNECTIONS = 3
-TOTAL_NUM_REFUGEES = 4  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+NUM_NODES = 100
+AVG__PHYSICAL_CONNECTIONS = 5
+TOTAL_NUM_REFUGEES = 1000000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
 # For timing different num processes
 TIME_TRIAL = False
 
 # Whether to pre-process the data
-PREPROCESS = True
+PREPROCESS = False
 
 # Location of data
 DATA_DIR = './data'
@@ -44,8 +44,8 @@ PRINT_NODE_WEIGHTS = False
 NUM_STEPS = 1
 
 # Number of friendships and kin to create
-NUM_FRIENDS = random.randint(1, 3)
-NUM_KIN = random.randint(1, 3)
+NUM_FRIENDS = 10  # random.randint(1,3)
+NUM_KIN = 10  # random.randint(1,3)
 
 # Percentage of refugees that move if in a district with one or more refugee camps
 PERCENT_MOVE_AT_CAMP = 0.3
@@ -250,7 +250,7 @@ class Sim(object):
         # Randomly create friendships between refs at same node
         new_friendships = 0
         for node in self.graph.nodes():
-            if (self.graph.nodes[node]['num_camps'] > 0) and (self.graph.nodes[node]['weight'] > 1):
+            if self.graph.nodes[node]['num_camps'] > 0:
                 num_new_rels = random.randint(NEW_FRIENDS_LOWER, NEW_FRIENDS_UPPER)
                 for x in range(num_new_rels):
                     ref1 = random.choice(ref_nodes[node])
@@ -434,7 +434,7 @@ if __name__ == '__main__':
             # Option 1 - Preprocess shapefiles
             print('Pre-processing graph data...')
             start = time.time()
-            polys, points, = preprocess()
+            polys, points = preprocess()
             print(f'Completed in {time.time() - start:.2f}s...')
         else:
             # Option 2 - Build graph from preprocessed polys shapefile
@@ -462,12 +462,12 @@ if __name__ == '__main__':
     # Run Sim
     print('Creating sim...')
     start = time.time()
-    # sim = Sim(graph, NUM_STEPS, NUM_PROCESSES, NUM_CHUNKS)
+    sim = Sim(graph, NUM_STEPS, NUM_PROCESSES, NUM_CHUNKS)
     print(f'Created sim in {time.time() - start:.2f}s...')
 
     start_node_weights = nx.get_node_attributes(graph, 'weight')
-    # sim.run()
-    end_node_weights = start_node_weights #  nx.get_node_attributes(graph, 'weight')
+    sim.run()
+    end_node_weights = nx.get_node_attributes(graph, 'weight')
     if PRINT_NODE_WEIGHTS:
         for node in graph.nodes:
             print(node, start_node_weights[node], end_node_weights[node])
@@ -475,9 +475,16 @@ if __name__ == '__main__':
     print("Total start weight:", sum(start_node_weights.values()))
     print("Total end weight:", sum(end_node_weights.values()))
 
-    # Write out to shapefile
-    polys['simEnd'] = polys['NAME_2'].map(end_node_weights)
-    polys.to_file(os.path.join(DATA_DIR, 'simOutput.shp'))
+
+def stop():
+    # Write end_node_weights to final_REFPOP column in shapefile
+    output = gpd.read_file(os.path.join(DATA_DIR, 'output_1.shp'))
+
+    output['simEnd'] = output['NAME_1'].map(end_node_weights)
+    # output['simEnd'] = end_node_weights.values()
+
+    # write out to shapefile
+    output.to_file(os.path.join(DATA_DIR, 'output_3_simOutput.shp'))
 
     # visualize simulation output
     # output = gpd.read_file(r"C:\Users\mrich\OneDrive\GMU\Summer 2019 Comp Migration\output_3_simOutput.shp")
@@ -489,7 +496,7 @@ if __name__ == '__main__':
 
     ## MODEL VALIDATION ##
     val = gpd.read_file(os.path.join(DATA_DIR, 'gadm36_TUR_1_val.shp'))
-    pop_by_province = gpd.read_file(os.path.join(DATA_DIR, 'REFPOP.shp'))
+    polys = gpd.read_file(os.path.join(DATA_DIR, 'REFPOP.shp'))
     # sim_val = gpd.read_file(r"C:\Users\mrich\OneDrive\GMU\Summer 2019 Comp Migration\output_3_simOutput.shp")
 
     # Remove non-english characters and fix duplicate district names ("Merkez")
@@ -497,42 +504,47 @@ if __name__ == '__main__':
         name = unidecode.unidecode(row.NAME_1)
         val.at[index, "NAME_1"] = name
 
-
     # Take refugee population by province, divide by number of districts in province, assign each equivalent value as REFPOP of district
-    polys['valPop'] = 0
     for index, row in val.iterrows():
         # print(type(row['val_mar19']))
         # print(type(polys_val.loc[index].count))
-
-        val_calc = row['val_mar19'] / float(pop_by_province.loc[index]['count'])
-        # print(polys.NAME_1)
+        val_calc = row['val_mar19'] / float(polys.loc[index]['count'])
         if not math.isnan(val_calc):
             val_calc = int(val_calc)
+        polys.REFPOP.iloc[[polys.NAME_1 == row.NAME_1]] = val_calc
 
-            polys.valPop.iloc[[polys.NAME_1 == row.NAME_1]] = val_calc
+    # Write out new shapefile with refugee validation population by district
+    val.to_file(os.path.join(DATA_DIR, 'output_4.shp'))
+
+    # C reate new colums for normalized values and comparison
+    val["val_mar19_norm"] = None
+    output["simEnd_norm"] = None
+    output["accuracy"] = None
 
     # Normalize both actual and predicted REFPOP for district-level comparison
-    minPop = min(polys.valPop)
-    maxPop = max(polys.valPop)
-    polys['valPopNorm'] = (polys['valPop'] - minPop) / (maxPop - minPop)
-    minPop = min(polys.simEnd)
-    maxPop = max(polys.simEnd)
-    polys['simEnd_norm'] = (polys['simEnd'] - minPop) / (maxPop - minPop)
-    # print(polys.simEnd_norm)
+    print(max(val.val_mar19))
+    print(min(val.val_mar19))
+    val['val_mar19_norm'] = ((val.val_mar19) - min((val.val_mar19))) / (max((val.val_mar19)) - min((val.val_mar19)))
+    print(val.val_mar19_norm)
+
+    print(max(output.simEnd))
+    print(min(output.simEnd))
+    output['simEnd_norm'] = ((output.simEnd) - min(output.simEnd)) / ((max(output.simEnd)) - min(output.simEnd))
+    print(output.simEnd_norm)
 
     # Comparative scaled_actual & scale_predicted
-    polys['accuracy'] = (polys.simEnd_norm - polys.valPopNorm)
+    output['accuracy'] = (output.simEnd_norm - val.val_mar19_norm)
 
     # Write out new shapefile with validation accuracy by district
-    polys.to_file(os.path.join(DATA_DIR, 'validationResults.shp'))
+    output.to_file(os.path.join(DATA_DIR, 'output_5_validation.shp'))
 
     # visualize validation output - unnecessary to read again
-    # validation = gpd.read_file(os.path.join(DATA_DIR, 'output_5_validation.shp'))
+    validation = gpd.read_file(os.path.join(DATA_DIR, 'output_5_validation.shp'))
     colors = 6
     figsize = (26, 20)
     cmap = 'winter_r'
-    accuracy = polys.accuracy
-    polys.plot(column=accuracy, cmap=cmap, scheme='equal_interval', k=colors, legend=True, linewidth=10)
+    accuracy = validation.accuracy
+    validation.plot(column=accuracy, cmap=cmap, scheme='equal_interval', k=colors, legend=True, linewidth=10)
 
     # SHOW PLOTS
     plt.show()
