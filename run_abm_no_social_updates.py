@@ -477,9 +477,10 @@ if __name__ == '__main__':
     print("Total start weight:", sum(start_node_weights.values()))
     print("Total end weight:", sum(end_node_weights.values()))
 
-    # Write out to shapefile
-    polys['simEnd'] = polys['NAME_2'].map(end_node_weights)
-    polys.to_file(os.path.join(DATA_DIR, 'simOutput.shp'))
+    if not TEST:
+        # Write out to shapefile
+        polys['simEnd'] = polys['NAME_2'].map(end_node_weights)
+        polys.to_file(os.path.join(DATA_DIR, 'simOutput.shp'))
 
     if VALIDATE:
         ## MODEL VALIDATION ##
