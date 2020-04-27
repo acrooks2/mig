@@ -27,7 +27,7 @@ NUM_NODES = 100
 AVG__PHYSICAL_CONNECTIONS = 5
 TOTAL_NUM_REFUGEES = 100000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
-TIME_TRIAL = True
+TIME_TRIAL = False
 # For running against real data
 PREPROCESS = False
 
@@ -74,8 +74,8 @@ NEW_FRIENDS_UPPER = 5
 
 # Number of chunks (processes) to split refugees into during a sim step
 # These dont necessarily have to be equal
-NUM_CHUNKS = 4
-NUM_PROCESSES = 4  # mp.cpu_count()
+NUM_CHUNKS = 2
+NUM_PROCESSES = 2  # mp.cpu_count()
 
 
 def find_new_node(sim, node, ref):
@@ -116,6 +116,8 @@ def process_refs(refs, sim):
         num_conflicts = sim.graph.nodes[node]['num_conflicts']
         num_camps = sim.graph.nodes[node]['num_camps']
 
+        new_weights = {key: 0 for key in sim.graph.nodes}
+
         if num_conflicts > 0:
             # Conflict zone
             move = True
@@ -132,9 +134,9 @@ def process_refs(refs, sim):
             new_node = find_new_node(sim, node, ref)
             if new_node:
                 new_refs[x].node = new_node
-
-        # Add ref to its new node
-        ref_nodes[new_refs[x].node].append(ref)
+                # Update weight dict for every node, subtracting the refugee that left and adding the refugee that entered
+                new_weights[node] -= 1
+                new_weights[new_node] += 1
 
     # return new refugee list and node weight updates for these refs
     return new_refs, ref_nodes
@@ -217,11 +219,11 @@ class Sim(object):
         nx.set_node_attributes(self.graph, node_scores, 'node_score')
 
         # Whether to process in parallel or synchronously
-        if self.num_processes > 0:
+        if self.num_processes > 1:
             print(f'Staring {self.num_processes} processes...')
             # Chunk refs and send to processes
             chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], self.num_chunks)
-            partial_pr = partial(process_refs, sim=copy.deepcopy(self))
+            partial_pr = partial(process_refs, sim=self)
             pool = Pool(self.num_processes)
 
             results = pool.map(partial_pr, chunked_refs)
@@ -233,35 +235,35 @@ class Sim(object):
             results = [process_refs([x for x in range(len(self.all_refugees))], sim)]
 
         self.all_refugees = []
-        ref_nodes = []
+        new_weights = []
+        new_weights.append(orig_weights)
         for result in results:
             self.all_refugees.extend(result[0])
-            ref_nodes.append(result[1])
+            new_weights.append(result[1])
 
-        print('Updating node refugee lists and counts...')
-        # Update node refugee lists (contains the indices of refugees at node)
-        ref_nodes = pd.DataFrame(ref_nodes)
-        ref_nodes = dict(zip(self.graph.nodes, list(ref_nodes.sum())))
-        new_weights = [len(x) for x in ref_nodes.values()]
-        # Update node weights
-        new_weights = dict(zip(self.graph.nodes, new_weights))
+        # self.all_refugees = new_refs
+
+        new_weights = pd.DataFrame(new_weights)
+
+        new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
+
         nx.set_node_attributes(self.graph, new_weights, 'weight')
 
-        print("Adding friendships at camps...")
-        # Randomly create friendships between refs at same node
-        new_friendships = 0
-        for node in self.graph.nodes():
-            if self.graph.nodes[node]['num_camps'] > 0:
-                num_new_rels = random.randint(NEW_FRIENDS_LOWER, NEW_FRIENDS_UPPER)
-                for x in range(num_new_rels):
-                    ref1 = random.choice(ref_nodes[node])
-                    ref2 = ref1
-                    while ref2 == ref1:
-                        ref2 = random.choice(ref_nodes[node])
-                    new_friendships += 1
-                    self.all_refugees[ref1].friend_list[ref2] = 1
-                    self.all_refugees[ref2].friend_list[ref1] = 1
-        print(f'Added {new_friendships} friendships at camps...')
+        # print("Adding friendships at camps...")
+        # # Randomly create friendships between refs at same node
+        # new_friendships = 0
+        # for node in self.graph.nodes():
+        #     if self.graph.nodes[node]['num_camps'] > 0:
+        #         num_new_rels = random.randint(NEW_FRIENDS_LOWER, NEW_FRIENDS_UPPER)
+        #         for x in range(num_new_rels):
+        #             ref1 = random.choice(ref_nodes[node])
+        #             ref2 = ref1
+        #             while ref2 == ref1:
+        #                 ref2 = random.choice(ref_nodes[node])
+        #             new_friendships += 1
+        #             self.all_refugees[ref1].friend_list[ref2] = 1
+        #             self.all_refugees[ref2].friend_list[ref1] = 1
+        # print(f'Added {new_friendships} friendships at camps...')
 
         print('Seeding network at border crossings...')
         new_ref_index = self.num_refugees
