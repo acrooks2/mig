@@ -467,7 +467,7 @@ if __name__ == '__main__':
 
     start_node_weights = nx.get_node_attributes(graph, 'weight')
     sim.run()
-    end_node_weights = start_node_weights #  nx.get_node_attributes(graph, 'weight')
+    end_node_weights = nx.get_node_attributes(graph, 'weight')
     if PRINT_NODE_WEIGHTS:
         for node in graph.nodes:
             print(node, start_node_weights[node], end_node_weights[node])
