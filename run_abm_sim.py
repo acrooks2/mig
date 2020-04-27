@@ -462,11 +462,11 @@ if __name__ == '__main__':
     # Run Sim
     print('Creating sim...')
     start = time.time()
-    # sim = Sim(graph, NUM_STEPS, NUM_PROCESSES, NUM_CHUNKS)
+    sim = Sim(graph, NUM_STEPS, NUM_PROCESSES, NUM_CHUNKS)
     print(f'Created sim in {time.time() - start:.2f}s...')
 
     start_node_weights = nx.get_node_attributes(graph, 'weight')
-    # sim.run()
+    sim.run()
     end_node_weights = start_node_weights #  nx.get_node_attributes(graph, 'weight')
     if PRINT_NODE_WEIGHTS:
         for node in graph.nodes:
