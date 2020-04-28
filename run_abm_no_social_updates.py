@@ -23,7 +23,7 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 # For testing
 TEST = True  # True
-NUM_NODES = 5
+NUM_NODES = 100000
 AVG__PHYSICAL_CONNECTIONS = 5
 TOTAL_NUM_REFUGEES = 100000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
