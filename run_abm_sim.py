@@ -18,7 +18,7 @@ import pandas as pd
 import networkx as nx
 import geopandas as gpd
 import matplotlib.pyplot as plt
-from multiprocessing.pool import Pool
+from multiprocessing.dummy import Pool
 
 # CONSTANTS
 # For testing
@@ -31,7 +31,7 @@ TOTAL_NUM_REFUGEES = 4  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 TIME_TRIAL = False
 
 # Whether to pre-process the data
-PREPROCESS = True
+PREPROCESS = False
 
 # Location of data
 DATA_DIR = './data'
@@ -229,7 +229,6 @@ class Sim(object):
         else:
             print('Not Multiprocessing')
             results = [self.process_refs([x for x in range(len(self.all_refugees))])]
-
         print('Gathering results...')
         self.all_refugees = []
         ref_nodes = []
