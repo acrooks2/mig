@@ -38,7 +38,7 @@ LONDON_COORDS = (51.5074, -0.1278)
 
 NUM_CHUNKS = 1  # mp.cpu_count()
 
-DATA_DIR = './data'
+DATA_DIR = '../data'
 
 
 class Ref(object):

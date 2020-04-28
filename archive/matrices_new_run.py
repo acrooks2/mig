@@ -43,7 +43,7 @@ LONDON_COORDS = (51.5074, -0.1278)
 
 NUM_CHUNKS = 4  # mp.cpu_count()
 
-DATA_DIR = './data'
+DATA_DIR = '../data'
 NUM_STEPS = 1
 SOCIAL_WINDOW = 3  # 1 (as soon as refs meet at node a link is formed) ... n
 BREAK_WINDOW = 2  # 0 (links break if not at the same node) .... n
