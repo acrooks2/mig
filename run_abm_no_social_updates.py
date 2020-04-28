@@ -23,9 +23,9 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 # For testing
 TEST = True  # True
-NUM_NODES = 100000
+NUM_NODES = 100
 AVG__PHYSICAL_CONNECTIONS = 5
-TOTAL_NUM_REFUGEES = 100000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+TOTAL_NUM_REFUGEES = 50000000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
 TIME_TRIAL = False
 # For running against real data
@@ -426,8 +426,14 @@ if __name__ == '__main__':
         print('Building test graph...')
         # For testing
         graph = nx.fast_gnp_random_graph(NUM_NODES, float(AVG__PHYSICAL_CONNECTIONS) / NUM_NODES)
-
-        nx.set_node_attributes(graph, name='weight', values=int(TOTAL_NUM_REFUGEES / NUM_NODES))
+        num_breaks = 50
+        refs = int(float(TOTAL_NUM_REFUGEES) / num_breaks)
+        refs_per_node = {key: 0 for key in graph.nodes()}
+        for x in range(0, num_breaks):
+            node = random.choice(list(graph.nodes()))
+            refs_per_node[node] += refs
+        
+        nx.set_node_attributes(graph, name='weight', values=refs_per_node)
         nx.set_node_attributes(graph, name='num_conflicts', values=1)  # todo - can make this random
         nx.set_node_attributes(graph, name='num_camps', values=0)  # todo - can make this random
         nx.set_node_attributes(graph, name='location_score', values=0.5)  # todo - can make this random
