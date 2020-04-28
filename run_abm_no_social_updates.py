@@ -5,7 +5,9 @@ Last Edited: 2020
 
 Spatially-Explicit Agent-Based Model (ABM) of Forced Migration from Syria to Turkey ###
 """
+import json
 import os
+import shutil
 import sys
 import csv
 import time
@@ -20,59 +22,81 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 from functools import partial
 from multiprocessing.pool import Pool
+
 # CONSTANTS
-# For testing
-TEST = True  # True
-NUM_NODES = 100
-AVG__PHYSICAL_CONNECTIONS = 5
-TOTAL_NUM_REFUGEES = 50000000  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+config = {
+    # For Testing - set test to True
+    'test': True,
+    'num_nodes': 100,
+    'avg_num_neighbors': 5,
+    'total_refs': 500,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
-TIME_TRIAL = False
-# For running against real data
-PREPROCESS = False
-VALIDATE = False
+    # For running time trials
+    'time_trial': False,
 
-# Location of data
-DATA_DIR = './data'
+    # Data commands (not available while testing)
+    'preprocess': False,
 
-# Whether to visualize the geographic network
-DRAW_GEO = False
-# Whether to print the node weights at the end of running
-PRINT_NODE_WEIGHTS = False
-# Set number of simulation steps; 1 step = 1 day
-NUM_STEPS = 1
+    # Validation (not available while testing)
+    'validate': False,
 
-# Number of friendships and kin to create
-NUM_FRIENDS = 1  # int for defined number. Tuple (low, high) for random number of friends
-NUM_KIN = 1  # int for defined number. Tuple (low, high) for random number of friends
+    # Sim params
+    'data_dir': './data',  # (not used while testing)
+    'output_dir': './output',
 
-# Percentage of refugees that move if in a district with one or more refugee camps
-PERCENT_MOVE_AT_CAMP = 0.3
-# Percentage of refugees that move if in a district with one of more conflict events
-PERCENT_MOVE_AT_CONFLICT = 1
-# Percentage of refugees that move if in a district without a conflict event or a camp
-PERCENT_MOVE_AT_OTHER = 0.7
+    # Output params
+    # Whether to visualize the geographic network
+    'draw_geo_graph': False,
+    # Whether to print the node weights at the end of running
+    'print_node_weights': False,
+    # Whether to write shapefiles every time step
+    'write_step_shapefiles': True,  # (not available while testing)
 
-# Point to calculate western movement
-LOCATION = (51.5074, -0.1278)
+    # Set number of simulation steps; 1 step = 1 day
+    'num_steps': 1,
 
-# Weight of each of the node desirability variables
-POPULATION_WEIGHT = .25  # total number of refs at node
-LOCATION_WEIGHT = .25  # closeness to LOCATION point
-CAMP_WEIGHT = .25  # (camps * CAMP_WEIGHT)
-CONFLICT_WEIGHT = .25  # (conflicts * (-1) * CONFLICT_WEIGHT)
-KIN_WEIGHT = .25  # (num kin * FRIEND_WEIGHT)
-FRIEND_WEIGHT = .25  # (num friends * KIN_WEIGHT)
+    # Number of friendships and kin to create
+    'num_friends': 1,  # int for defined number. Tuple (low, high) for random number of friends
+    'num_kin': 1,  # int for defined number. Tuple (low, high) for random number of friends
 
-# Number of refugees that cross the Syrian-Turkish border at each time step
-SEED_REFS = 0  # If this is 0, seeding will not occur
-# Districts that contain open border crossings during month of simulation start
-BORDER_CROSSING_LIST = ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu']  # [0, 1, 2, 3]
+    # Percentage of refugees that move if in a district with one or more refugee camps
+    'percent_move_at_camp': 0.3,
+    # Percentage of refugees that move if in a district with one of more conflict events
+    'percent_move_at_conflict': 1,
+    # Percentage of refugees that move if in a district without a conflict event or a camp
+    'percent_move_other': 0.7,
 
-# Number of chunks (processes) to split refugees into during a sim step
-# These dont necessarily have to be equal
-NUM_BATCHES = 4
-NUM_PROCESSES = 4  # mp.cpu_count()
+    # Point to calculate western movement
+    'location': (51.5074, -0.1278),
+
+    # Weight of each of the node desirability variables
+    'population_weight': 0.25,  # total number of refs at node
+    'location_weight': 0.25,  # closeness to LOCATION point
+    'camp_weight': 0.25,  # (camps * CAMP_WEIGHT)
+    'conflict_weight': 0.25,  # (conflicts * (-1) * CONFLICT_WEIGHT)
+    'kin_weight': 0.25,  # (num kin * FRIEND_WEIGHT)
+    'friend_weight': 0.25,  # (num friends * KIN_WEIGHT)
+
+    # Number of refugees to seed each node in border crossing with. new refs = seed_refs * len(seed_nodes)
+    'seed_refs': 0,  # If this is 0, seeding will not occur
+    'seed_nodes': ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'],  # [0, 1, 2, 3]
+
+    # Number of chunks (processes) to split refugees into during a sim step
+    # These dont necessarily have to be equal
+    'num_batches': 4,
+    'num_processes': 4  # mp.cpu_count()
+
+}
+
+# Create directories for output
+if not os.path.exists(config['output_dir']):
+    os.makedirs(config['output_dir'])
+if not os.path.exists(os.path.join(config['output_dir'], 'shapefiles/')):
+    os.makedirs(os.path.join(config['output_dir'], 'shapefiles/'))
+
+# Write params to file
+with open(os.path.join(config['output_dir'], 'parameters.json'), 'w+') as fp:
+    json.dump(config, fp, indent=4)
 
 
 def find_new_node(sim, node, ref):
@@ -95,8 +119,9 @@ def find_new_node(sim, node, ref):
     for n in neighbors:
         kin_at_node = kin_nodes.count(n)
         friends_at_node = friend_nodes.count(n)
-        desirability = (kin_at_node * KIN_WEIGHT) + (friends_at_node * FRIEND_WEIGHT) + sim.graph.nodes[n][
-            'node_score']  # + self.graph.nodes[n]['']
+        desirability = (kin_at_node * config['kin_weight']) + (friends_at_node * config['friend_weight']) + \
+                       sim.graph.nodes[n][
+                           'node_score']  # + self.graph.nodes[n]['']
         if desirability > most_desirable_score:
             most_desirable_score = desirability
             most_desirable_neighbor = n
@@ -120,10 +145,10 @@ def process_refs(refs, sim):
             move = True
         elif num_camps > 0:
             # At a camp
-            move = random.random() < PERCENT_MOVE_AT_CAMP
+            move = random.random() < config['percent_move_at_camp']
         else:
             # Neither camp nor conflict
-            move = random.random() < PERCENT_MOVE_AT_OTHER
+            move = random.random() < config['percent_move_other']
 
         new_refs.append(copy.deepcopy(sim.all_refugees[ref]))
 
@@ -131,7 +156,9 @@ def process_refs(refs, sim):
             new_node = find_new_node(sim, node, ref)
             if new_node:
                 new_refs[x].node = new_node
-                # Update weight dict for every node, subtracting the refugee that left and adding the refugee that entered
+                # Update weight dict
+                # Subtract the refugee that left
+                # Add the refugee that entered
                 new_weights[node] -= 1
                 new_weights[new_node] += 1
 
@@ -151,7 +178,7 @@ class Ref(object):
 
     def create_defined_social_links(self, index, sim):
         # create kin
-        for x in range(NUM_KIN):
+        for x in range(config['num_kin']):
             kin = index
             while kin == index:
                 kin = random.randint(0, sim.num_refugees - 1)
@@ -160,7 +187,7 @@ class Ref(object):
             sim.all_refugees[kin].kin_list[index] = 1
 
         # create friends
-        for x in range(NUM_FRIENDS):
+        for x in range(config['num_friends']):
             friend = index
             while friend == index:
                 friend = random.randint(0, sim.num_refugees - 1)
@@ -170,7 +197,7 @@ class Ref(object):
 
     def create_random_social_links(self, index, sim):
         # create kin
-        for x in range(random.randint(NUM_KIN[0], NUM_KIN[1])):
+        for x in range(random.randint(config['num_kin'][0], config['num_kin'][1])):
             kin = index
             while kin == index:
                 kin = random.randint(0, sim.num_refugees - 1)
@@ -179,7 +206,7 @@ class Ref(object):
             sim.all_refugees[kin].kin_list[index] = 1
 
         # create friends
-        for x in range(random.randint(NUM_FRIENDS[0], NUM_FRIENDS[1])):
+        for x in range(random.randint(config['num_friends'][0], config['num_friends'][1])):
             friend = index
             while friend == index:
                 friend = random.randint(0, sim.num_refugees - 1)
@@ -203,7 +230,7 @@ class Sim(object):
         for node in self.graph.nodes():
             self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(self.graph.nodes[node]['weight'])])
 
-        if isinstance(NUM_FRIENDS, int):
+        if isinstance(config['num_friends'], int):
             for index, ref in enumerate(self.all_refugees):
                 ref.create_defined_social_links(index, self)
         else:
@@ -233,7 +260,8 @@ class Sim(object):
         # Update node score
         location_scores = nx.get_node_attributes(self.graph, 'location_score')
         node_scores = [
-            (w * POPULATION_WEIGHT) + (x * LOCATION_WEIGHT) + (y * CAMP_WEIGHT) + (z * (-1) * CONFLICT_WEIGHT) for
+            (w * config['population_weight']) + (x * config['location_weight']) + (y * config['camp_weight']) + (
+                        z * (-1) * config['conflict_weight']) for
             w, x, y, z in
             zip(norm_weights.values(), location_scores.values(), num_camps, num_conflicts)]
         node_scores = dict(zip(norm_weights.keys(), node_scores))
@@ -252,7 +280,7 @@ class Sim(object):
             pool.join()
         else:
             print('Not Multiprocessing')
-            results = [process_refs([x for x in range(len(self.all_refugees))], sim)]
+            results = [process_refs([x for x in range(len(self.all_refugees))], self)]
 
         self.all_refugees = []
         new_weights = [orig_weights]
@@ -264,13 +292,13 @@ class Sim(object):
         new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
         nx.set_node_attributes(self.graph, new_weights, 'weight')
 
-        if SEED_REFS > 0:
+        if config['seed_refs'] > 0:
             print('Seeding network at border crossings...')
             new_ref_index = self.num_refugees
-            self.num_refugees += SEED_REFS * len(BORDER_CROSSING_LIST)
-            for node in BORDER_CROSSING_LIST:
-                self.graph.nodes[node]['weight'] += SEED_REFS
-                self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, SEED_REFS)])
+            self.num_refugees += config['seed_refs'] * len(config['seed_nodes'])
+            for node in config['seed_nodes']:
+                self.graph.nodes[node]['weight'] += config['seed_refs']
+                self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, config['seed_refs'])])
 
             for index in range(new_ref_index, self.num_refugees):
                 self.all_refugees[index].create_social_links(index, self)
@@ -281,6 +309,13 @@ class Sim(object):
             start = time.time()
             print(f'Starting step {x + 1}...')
             self.step()
+
+            if config['write_step_shapefiles'] and not config['test']:
+                node_weights = nx.get_node_attributes(self.graph, 'weight')
+                # Write out to shapefile
+                polys['REFPOP'] = polys['NAME_2'].map(node_weights)
+                polys.to_file(os.path.join(config['output_dir'], 'shapefiles/', f'simOutput_{x:03}.shp'))
+
             step_time = time.time() - start
             avg_step_time += step_time
             print(f'Step Time: {step_time:2f}')
@@ -295,14 +330,14 @@ def preprocess():
     # ***Data Engineering Using GeoPandas***
 
     # Get shapefile of Turkish districts (and re-project)
-    polys = gpd.read_file(os.path.join(DATA_DIR, 'gadm36_TUR_2.shp'))
+    polys = gpd.read_file(os.path.join(config['data_dir'], 'gadm36_TUR_2.shp'))
 
     # Check and set spatial projection
     # polys = polys.to_crs({'init': 'epsg:4326'})
     # print(polys.crs)
 
     # Get refugee population by province data (and re-project), from Turkish Statistical Institute, February 2019
-    pop_by_province = gpd.read_file(os.path.join(DATA_DIR, 'REFPOP.shp'))
+    pop_by_province = gpd.read_file(os.path.join(config['data_dir'], 'REFPOP.shp'))
 
     # Check and set spatial projection
     # pop_by_province = pop_by_province.to_crs({'init': 'epsg:4326'})
@@ -332,7 +367,7 @@ def preprocess():
 
     # ** Add conflict data **
     # Read in ACLED event data from February 2019 (and set projection)
-    df_conflict = pd.read_csv(os.path.join(DATA_DIR, 'FebACLEDextract.csv'))
+    df_conflict = pd.read_csv(os.path.join(config['data_dir'], 'FebACLEDextract.csv'))
     conflict = gpd.GeoDataFrame(df_conflict,
                                 geometry=gpd.points_from_xy(df_conflict.longitude, df_conflict.latitude),
                                 crs='epsg:4326')
@@ -342,7 +377,7 @@ def preprocess():
 
     # ** Add camps **
     # Read in refugee camp data (and re-project) from UNHCR Regional IM Working Group February 2019 (updated every 6 months)
-    camps = gpd.read_file(os.path.join(DATA_DIR, 'tur_camps.shp'))
+    camps = gpd.read_file(os.path.join(config['data_dir'], 'tur_camps.shp'))
     # Create new column in target shapefile for refugee camps
     polys["camp"] = polys.apply(lambda row: sum(camps.within(row.geometry)), axis=1)
 
@@ -350,7 +385,7 @@ def preprocess():
     # Calculate location score. Districts closest to specified location are scored highest.
     polys['location'] = polys.apply(
         lambda row: math.sqrt(
-            (row.geometry.centroid.x - LOCATION[1]) ** 2 + (row.geometry.centroid.y - LOCATION[0]) ** 2), axis=1)
+            (row.geometry.centroid.x - config['location'][1]) ** 2 + (row.geometry.centroid.y - config['location'][0]) ** 2), axis=1)
     max_distance = max(list(polys['location']))
     polys['location'] = polys.apply(lambda row: 1 - (row.location / max_distance), axis=1)
 
@@ -359,10 +394,10 @@ def preprocess():
     points['geometry'] = points['geometry'].centroid
 
     # Write points to new Shapefile
-    points.to_file(os.path.join(DATA_DIR, 'preprocessed_data.shp'))
+    points.to_file(os.path.join(config['data_dir'], 'preprocessed_data.shp'))
 
     # Write polys to new Shapefile
-    polys.to_file(os.path.join(DATA_DIR, 'preprocessed_poly_data.shp'))
+    polys.to_file(os.path.join(config['data_dir'], 'preprocessed_poly_data.shp'))
 
     return polys, points, pop_by_province
 
@@ -409,7 +444,7 @@ def time_trial(graph, output_file='results.csv', num_steps=10, num_processes=[1]
         writer = csv.writer(fp)
         writer.writerow(['STEPS', 'PROCESSES', 'BATCHES', 'TIME_(S)'])
         for n_process in num_processes:
-#             for n_batch in num_batches:
+            #             for n_batch in num_batches:
             sim = Sim(graph, num_steps, n_process, n_process)
             avg_step_time = sim.run()
 
@@ -422,23 +457,23 @@ if __name__ == '__main__':
     Program Execution starts here
     """
 
-    if TEST:
+    if config['test']:
         print('Building test graph...')
         # For testing
-        graph = nx.fast_gnp_random_graph(NUM_NODES, float(AVG__PHYSICAL_CONNECTIONS) / NUM_NODES)
+        graph = nx.fast_gnp_random_graph(config['num_nodes'], float(config['avg_num_neighbors']) / config['num_nodes'])
         num_breaks = 50
-        refs = int(float(TOTAL_NUM_REFUGEES) / num_breaks)
+        refs = int(float(config['total_refs']) / num_breaks)
         refs_per_node = {key: 0 for key in graph.nodes()}
         for x in range(0, num_breaks):
             node = random.choice(list(graph.nodes()))
             refs_per_node[node] += refs
-        
+
         nx.set_node_attributes(graph, name='weight', values=refs_per_node)
         nx.set_node_attributes(graph, name='num_conflicts', values=1)  # todo - can make this random
         nx.set_node_attributes(graph, name='num_camps', values=0)  # todo - can make this random
         nx.set_node_attributes(graph, name='location_score', values=0.5)  # todo - can make this random
     else:
-        if PREPROCESS:  # Run pre-processing
+        if config['preprocess']:  # Run pre-processing
             # Option 1 - Preprocess shapefiles
             print('Pre-processing graph data...')
             start = time.time()
@@ -454,12 +489,11 @@ if __name__ == '__main__':
         graph = build_graph(polys)
 
         # Draw graph
-        if DRAW_GEO:
+        if config['draw_geo_graph']:
             print('Drawing graph...')
             draw(polys, graph)
 
-    if TIME_TRIAL:
-
+    if config['time_trial']:
         num_steps = 5
         processes = [1, 2, 4, 8, 16]  # , 4, 8, 12, 16]
         chunks = [1]  # , 4, 8, 12, 16]
@@ -470,28 +504,28 @@ if __name__ == '__main__':
     # Run Sim
     print('Creating sim...')
     start = time.time()
-    sim = Sim(graph, NUM_STEPS, NUM_PROCESSES, NUM_BATCHES)
+    sim = Sim(graph, config['num_steps'], config['num_processes'], config['num_batches'])
     print(f'Created sim in {time.time() - start:.2f}s...')
 
-    start_node_weights = nx.get_node_attributes(graph, 'weight')
+    start_node_weights = nx.get_node_attributes(sim.graph, 'weight')
     sim.run()
-    end_node_weights = nx.get_node_attributes(graph, 'weight')
-    if PRINT_NODE_WEIGHTS:
+    end_node_weights = nx.get_node_attributes(sim.graph, 'weight')
+    if config['print_node_weights']:
         for node in graph.nodes:
             print(node, start_node_weights[node], end_node_weights[node])
 
     print("Total start weight:", sum(start_node_weights.values()))
     print("Total end weight:", sum(end_node_weights.values()))
 
-    if not TEST:
+    if not config['test']:
         # Write out to shapefile
         polys['simEnd'] = polys['NAME_2'].map(end_node_weights)
-        polys.to_file(os.path.join(DATA_DIR, 'simOutput.shp'))
+        polys.to_file(os.path.join(config['data_dir'], 'simOutput.shp'))
 
-    if VALIDATE:
+    if config['validate'] and not config['test']:
         ## MODEL VALIDATION ##
-        val = gpd.read_file(os.path.join(DATA_DIR, 'gadm36_TUR_1_val.shp'))
-        pop_by_province = gpd.read_file(os.path.join(DATA_DIR, 'REFPOP.shp'))
+        val = gpd.read_file(os.path.join(config['data_dir'], 'gadm36_TUR_1_val.shp'))
+        pop_by_province = gpd.read_file(os.path.join(config['data_dir'], 'REFPOP.shp'))
         # sim_val = gpd.read_file(r"C:\Users\mrich\OneDrive\GMU\Summer 2019 Comp Migration\output_3_simOutput.shp")
 
         # Remove non-english characters and fix duplicate district names ("Merkez")
@@ -525,7 +559,7 @@ if __name__ == '__main__':
         polys['accuracy'] = (polys.simEnd_norm - polys.valPopNorm)
 
         # Write out new shapefile with validation accuracy by district
-        polys.to_file(os.path.join(DATA_DIR, 'validationResults.shp'))
+        polys.to_file(os.path.join(config['data_dir'], 'validationResults.shp'))
 
         # visualize validation output - unnecessary to read again
         # validation = gpd.read_file(os.path.join(DATA_DIR, 'output_5_validation.shp'))
