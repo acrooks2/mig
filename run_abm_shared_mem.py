@@ -25,10 +25,10 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 config = {
     # For Testing - set test to True
-    'test': True,
+    'test': False,
     'num_nodes': 1000,
     'avg_num_neighbors': 5,
-    'total_refs': 50000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 500000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
     'num_camps': 1,
 
     # For running time trials
@@ -78,18 +78,18 @@ config = {
     'friend_weight': 0.25,  # (num friends * KIN_WEIGHT)
 
     # Number of refugees to seed each node in border crossing with. new refs = seed_refs * len(seed_nodes)
-    'seed_refs': 2,  # If this is 0, seeding will not occur
-    'seed_nodes': [0,1,2],  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'],  # [0, 1, 2, 3]
+    'seed_refs': 0,  # If this is 0, seeding will not occur
+    'seed_nodes': ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'],  # [0, 1, 2, 3]
     
     # Number new friends to create between co-located refs at camps.
     # If both = 0, new friends will not be generated.
-    'new_friends_lower': 1,
-    'new_friends_upper': 1,
+    'new_friends_lower': 0,
+    'new_friends_upper': 0,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
-    'num_batches': 8,
-    'num_processes': 4  # mp.cpu_count()
+    'num_batches': 2,
+    'num_processes': 2  # mp.cpu_count()
 
 }
 
@@ -283,9 +283,7 @@ class Sim(object):
             bs = int(bs)
             se = [[x, x+bs] for x in range(0, len(self.all_refugees), bs)]
             se[-1][-1] = len(self.all_refugees)
-            print(len(se))
-            global sim
-            sim = self
+
             pool = Pool(self.num_processes)
 
             results = pool.map(process_refs, se)
@@ -495,7 +493,7 @@ if __name__ == '__main__':
     """
     Program Execution starts here
     """
-
+    
     if config['test']:
         print('Building test graph...')
         # For testing
