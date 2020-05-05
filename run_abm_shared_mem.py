@@ -27,15 +27,15 @@ from multiprocessing.pool import Pool
 config = {
     # For Testing - set test to True
     'test': True,
-    'num_nodes': 100,
+    'num_nodes': 1000,
     'avg_num_neighbors': 5,
-    'total_refs': 500,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 5000000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
     # For running time trials
     'time_trial': False,
 
     # Data commands (not available while testing)
-    'preprocess': False,
+    'preprocess': True,
 
     # Validation (not available while testing)
     'validate': False,
@@ -83,8 +83,8 @@ config = {
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
-    'num_batches': 4,
-    'num_processes': 4  # mp.cpu_count()
+    'num_batches': 12,
+    'num_processes': 12  # mp.cpu_count()
 
 }
 
@@ -114,8 +114,8 @@ def find_new_node(node, ref):
         # print(ref_pop, "refugees can't move from isolates", node)
         return
 
-    kin_nodes = [sim.all_refugees[kin].node for kin in sim.all_refugees[ref].kin_list]
-    friend_nodes = [sim.all_refugees[friend].node for friend in sim.all_refugees[ref].friend_list]
+    kin_nodes = [sim.all_refugees[kin].node for kin in ref.kin_list]
+    friend_nodes = [sim.all_refugees[friend].node for friend in ref.friend_list]
 
     # calculate neighbor with highest population
     for n in neighbors:
@@ -133,15 +133,15 @@ def find_new_node(node, ref):
 
 def process_refs(se):
     global sim
+    
     new_refs = []
     ref_nodes = {key: [] for key in sim.graph.nodes}
-    print('after dict crreation')
+    new_weights = {key: 0 for key in sim.graph.nodes}
+    
     for x, ref in enumerate(sim.all_refugees[se[0]:se[1]]):
-        node = sim.all_refugees[ref].node
+        node = ref.node
         num_conflicts = sim.graph.nodes[node]['num_conflicts']
         num_camps = sim.graph.nodes[node]['num_camps']
-
-        new_weights = {key: 0 for key in sim.graph.nodes}
 
         if num_conflicts > 0:
             # Conflict zone
@@ -153,7 +153,7 @@ def process_refs(se):
             # Neither camp nor conflict
             move = random.random() < config['percent_move_other']
 
-        new_refs.append(copy.deepcopy(sim.all_refugees[ref]))
+        new_refs.append(copy.deepcopy(ref))
 
         if move:
             new_node = find_new_node(node, ref)
@@ -166,7 +166,7 @@ def process_refs(se):
                 new_weights[new_node] += 1
 
     # return new refugee list and node weight updates for these refs
-    return new_refs, ref_nodes
+    return new_refs, new_weights
 
 
 class Ref(object):
@@ -292,7 +292,7 @@ class Sim(object):
             pool.join()
         else:
             print('Not Multiprocessing')
-            results = [process_refs([x for x in range(len(self.all_refugees))], self)]
+            results = [process_refs((0, len(self.all_refugees)))]
 
         self.all_refugees = []
         new_weights = [orig_weights]
