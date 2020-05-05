@@ -20,7 +20,6 @@ import pandas as pd
 import networkx as nx
 import geopandas as gpd
 import matplotlib.pyplot as plt
-from functools import partial
 from multiprocessing.pool import Pool
 
 # CONSTANTS
@@ -29,7 +28,7 @@ config = {
     'test': True,
     'num_nodes': 1000,
     'avg_num_neighbors': 5,
-    'total_refs': 5000000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 10000000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
     # For running time trials
     'time_trial': False,
@@ -274,8 +273,6 @@ class Sim(object):
         if self.num_processes > 1:
             print(f'Staring {self.num_processes} processes...')
             # Chunk refs and send to processes
-            # chunked_refs = np.array_split([x for x in range(len(self.all_refugees))], self.num_batches)
-            # partial_pr = partial(process_refs, sim=self)
             bs = len(self.all_refugees) / float(self.num_batches)
             if bs % 1 != 0:
                 bs = bs+1
