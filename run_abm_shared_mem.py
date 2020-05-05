@@ -28,7 +28,8 @@ config = {
     'test': True,
     'num_nodes': 1000,
     'avg_num_neighbors': 5,
-    'total_refs': 10000000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 50000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'num_camps': 1,
 
     # For running time trials
     'time_trial': False,
@@ -77,13 +78,18 @@ config = {
     'friend_weight': 0.25,  # (num friends * KIN_WEIGHT)
 
     # Number of refugees to seed each node in border crossing with. new refs = seed_refs * len(seed_nodes)
-    'seed_refs': 0,  # If this is 0, seeding will not occur
-    'seed_nodes': ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'],  # [0, 1, 2, 3]
+    'seed_refs': 2,  # If this is 0, seeding will not occur
+    'seed_nodes': [0,1,2],  # ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'],  # [0, 1, 2, 3]
+    
+    # Number new friends to create between co-located refs at camps.
+    # If both = 0, new friends will not be generated.
+    'new_friends_lower': 1,
+    'new_friends_upper': 1,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
-    'num_batches': 12,
-    'num_processes': 12  # mp.cpu_count()
+    'num_batches': 8,
+    'num_processes': 4  # mp.cpu_count()
 
 }
 
@@ -98,7 +104,6 @@ with open(os.path.join(config['output_dir'], 'parameters.json'), 'w+') as fp:
     json.dump(config, fp, indent=4)
 
 sim = None
-
 
 def find_new_node(node, ref):
     global sim
@@ -159,15 +164,12 @@ def process_refs(se):
             new_node = find_new_node(node, ref)
             if new_node:
                 new_refs[x].node = new_node
-                # Update weight dict
-                # Subtract the refugee that left
-                # Add the refugee that entered
-                new_weights[node] -= 1
-                new_weights[new_node] += 1
-                ref_nodes[node].append(ref)
+            
+        
+        ref_nodes[new_refs[x].node].append(x+se[0])
 
     # return new refugee list and node weight updates for these refs
-    return new_refs, new_weights
+    return new_refs, ref_nodes
 
 
 class Ref(object):
@@ -175,15 +177,12 @@ class Ref(object):
     Class representative of a single refugee
     """
 
-    def __init__(self, node):
-        self.node = node
+    def __init__(self, node, num_refugees):
+        self.node = node  # Not used. Agent ID == Index in Sim.all_refugees
         self.kin_list = {}
         self.friend_list = {}
 
-    def create_defined_social_links(self, index):
-
-        global sim
-
+    def create_defined_social_links(self, index, sim):
         # create kin
         for x in range(config['num_kin']):
             kin = index
@@ -202,10 +201,7 @@ class Ref(object):
             # set for other friend
             sim.all_refugees[friend].friend_list[index] = 1
 
-    def create_random_social_links(self, index):
-
-        global sim
-
+    def create_random_social_links(self, index, sim):
         # create kin
         for x in range(random.randint(config['num_kin'][0], config['num_kin'][1])):
             kin = index
@@ -238,14 +234,14 @@ class Sim(object):
         self.num_refugees = sum([self.graph.nodes[n]['weight'] for n in self.graph.nodes])
         self.all_refugees = []
         for node in self.graph.nodes():
-            self.all_refugees.extend([Ref(node) for x in range(self.graph.nodes[node]['weight'])])
+            self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(self.graph.nodes[node]['weight'])])
 
         if isinstance(config['num_friends'], int):
             for index, ref in enumerate(self.all_refugees):
-                ref.create_defined_social_links(index)
+                ref.create_defined_social_links(index, self)
         else:
             for index, ref in enumerate(self.all_refugees):
-                ref.create_random_social_links(index)
+                ref.create_random_social_links(index, self)
 
     def step(self):
         nx.get_node_attributes(self.graph, 'weight')
@@ -280,14 +276,16 @@ class Sim(object):
         # Whether to process in parallel or synchronously
         if self.num_processes > 1:
             print(f'Staring {self.num_processes} processes...')
-            # Calculate batch start and end indices
+            # Chunk refs and send to processes
             bs = len(self.all_refugees) / float(self.num_batches)
             if bs % 1 != 0:
                 bs = bs+1
             bs = int(bs)
             se = [[x, x+bs] for x in range(0, len(self.all_refugees), bs)]
             se[-1][-1] = len(self.all_refugees)
-
+            print(len(se))
+            global sim
+            sim = self
             pool = Pool(self.num_processes)
 
             results = pool.map(process_refs, se)
@@ -298,14 +296,35 @@ class Sim(object):
             results = [process_refs((0, len(self.all_refugees)))]
 
         self.all_refugees = []
-        new_weights = [orig_weights]
+        # new_weights = [orig_weights]
+        ref_nodes = []
         for result in results:
             self.all_refugees.extend(result[0])
-            new_weights.append(result[1])
+            ref_nodes.append(result[1])
 
-        new_weights = pd.DataFrame(new_weights)
-        new_weights = dict(zip(self.graph.nodes, list(new_weights.sum(numeric_only=True))))
+        ref_nodes = pd.DataFrame(ref_nodes)
+        ref_nodes = dict(zip(self.graph.nodes, list(ref_nodes.sum())))
+                
+        new_weights = [len(x) for x in ref_nodes.values()]
+        new_weights = dict(zip(self.graph.nodes, new_weights))
         nx.set_node_attributes(self.graph, new_weights, 'weight')
+        
+        if config['new_friends_lower'] > 0 and config['new_friends_upper'] > 0:
+            print("Adding friendships at camps...")
+            # Randomly create friendships between refs at same node
+            new_friendships = 0
+            for node in self.graph.nodes():
+                if (self.graph.nodes[node]['num_camps'] > 0) and (self.graph.nodes[node]['weight'] > 1):
+                    num_new_rels = random.randint(config['new_friends_lower'], config['new_friends_upper'])
+                    for x in range(num_new_rels):
+                        ref1 = random.choice(ref_nodes[node])
+                        ref2 = ref1
+                        while ref2 == ref1:
+                            ref2 = random.choice(ref_nodes[node])
+                        new_friendships += 1
+                        self.all_refugees[ref1].friend_list[ref2] = 1
+                        self.all_refugees[ref2].friend_list[ref1] = 1
+            print(f'Added {new_friendships} friendships at camps...')
 
         if config['seed_refs'] > 0:
             print('Seeding network at border crossings...')
@@ -314,9 +333,14 @@ class Sim(object):
             for node in config['seed_nodes']:
                 self.graph.nodes[node]['weight'] += config['seed_refs']
                 self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, config['seed_refs'])])
-
-            for index in range(new_ref_index, self.num_refugees):
-                self.all_refugees[index].create_social_links(index, self)
+                
+            # create social links
+            if isinstance(config['num_friends'], int):
+                for index, ref in enumerate(self.all_refugees):
+                    ref.create_defined_social_links(index, self)
+            else:
+                for index, ref in enumerate(self.all_refugees):
+                    ref.create_random_social_links(index, self)
 
     def run(self):
         avg_step_time = 0
@@ -472,8 +496,6 @@ if __name__ == '__main__':
     Program Execution starts here
     """
 
-    global sim
-
     if config['test']:
         print('Building test graph...')
         # For testing
@@ -487,7 +509,7 @@ if __name__ == '__main__':
 
         nx.set_node_attributes(graph, name='weight', values=refs_per_node)
         nx.set_node_attributes(graph, name='num_conflicts', values=1)  # todo - can make this random
-        nx.set_node_attributes(graph, name='num_camps', values=0)  # todo - can make this random
+        nx.set_node_attributes(graph, name='num_camps', values=config['num_camps'])  # todo - can make this random
         nx.set_node_attributes(graph, name='location_score', values=0.5)  # todo - can make this random
     else:
         if config['preprocess']:  # Run pre-processing
