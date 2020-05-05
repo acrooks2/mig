@@ -34,7 +34,7 @@ TIME_TRIAL = False
 PREPROCESS = False
 
 # Location of data
-DATA_DIR = './data'
+DATA_DIR = '../data'
 
 # Whether to visualize the geographic network
 DRAW_GEO = False
@@ -439,7 +439,7 @@ if __name__ == '__main__':
             # Option 2 - Build graph from preprocessed polys shapefile
             print('Loading graph data from file...')
             start = time.time()
-            polys = gpd.read_file('./data/preprocessed_poly_data.shp')
+            polys = gpd.read_file('../data/preprocessed_poly_data.shp')
             print(f'Completed in {time.time() - start:.2f}s...')
 
         graph = build_graph(polys)

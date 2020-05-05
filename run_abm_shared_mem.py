@@ -99,6 +99,7 @@ with open(os.path.join(config['output_dir'], 'parameters.json'), 'w+') as fp:
 
 sim = None
 
+
 def find_new_node(node, ref):
     global sim
     # find neighbor with highest weight
@@ -163,6 +164,7 @@ def process_refs(se):
                 # Add the refugee that entered
                 new_weights[node] -= 1
                 new_weights[new_node] += 1
+                ref_nodes[node].append(ref)
 
     # return new refugee list and node weight updates for these refs
     return new_refs, new_weights
@@ -173,12 +175,15 @@ class Ref(object):
     Class representative of a single refugee
     """
 
-    def __init__(self, node, num_refugees):
-        self.node = node  # Not used. Agent ID == Index in Sim.all_refugees
+    def __init__(self, node):
+        self.node = node
         self.kin_list = {}
         self.friend_list = {}
 
-    def create_defined_social_links(self, index, sim):
+    def create_defined_social_links(self, index):
+
+        global sim
+
         # create kin
         for x in range(config['num_kin']):
             kin = index
@@ -197,7 +202,10 @@ class Ref(object):
             # set for other friend
             sim.all_refugees[friend].friend_list[index] = 1
 
-    def create_random_social_links(self, index, sim):
+    def create_random_social_links(self, index):
+
+        global sim
+
         # create kin
         for x in range(random.randint(config['num_kin'][0], config['num_kin'][1])):
             kin = index
@@ -230,14 +238,14 @@ class Sim(object):
         self.num_refugees = sum([self.graph.nodes[n]['weight'] for n in self.graph.nodes])
         self.all_refugees = []
         for node in self.graph.nodes():
-            self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(self.graph.nodes[node]['weight'])])
+            self.all_refugees.extend([Ref(node) for x in range(self.graph.nodes[node]['weight'])])
 
         if isinstance(config['num_friends'], int):
             for index, ref in enumerate(self.all_refugees):
-                ref.create_defined_social_links(index, self)
+                ref.create_defined_social_links(index)
         else:
             for index, ref in enumerate(self.all_refugees):
-                ref.create_random_social_links(index, self)
+                ref.create_random_social_links(index)
 
     def step(self):
         nx.get_node_attributes(self.graph, 'weight')
@@ -272,16 +280,14 @@ class Sim(object):
         # Whether to process in parallel or synchronously
         if self.num_processes > 1:
             print(f'Staring {self.num_processes} processes...')
-            # Chunk refs and send to processes
+            # Calculate batch start and end indices
             bs = len(self.all_refugees) / float(self.num_batches)
             if bs % 1 != 0:
                 bs = bs+1
             bs = int(bs)
             se = [[x, x+bs] for x in range(0, len(self.all_refugees), bs)]
             se[-1][-1] = len(self.all_refugees)
-            print(len(se))
-            global sim
-            sim = self
+
             pool = Pool(self.num_processes)
 
             results = pool.map(process_refs, se)
@@ -465,6 +471,8 @@ if __name__ == '__main__':
     """
     Program Execution starts here
     """
+
+    global sim
 
     if config['test']:
         print('Building test graph...')

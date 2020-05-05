@@ -18,15 +18,15 @@ import pandas as pd
 import networkx as nx
 import geopandas as gpd
 import matplotlib.pyplot as plt
-from multiprocessing.dummy import Pool
+from multiprocessing.pool import Pool
 from functools import partial
 
 # CONSTANTS
 # For testing
 TEST = False  # True
-NUM_NODES = 50
+NUM_NODES = 1000
 AVG__PHYSICAL_CONNECTIONS = 5
-TOTAL_NUM_REFUGEES = 500  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+TOTAL_NUM_REFUGEES = 5001  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
 
 # For timing different num processes
 TIME_TRIAL = False
@@ -35,7 +35,7 @@ TIME_TRIAL = False
 PREPROCESS = False
 
 # Location of data
-DATA_DIR = './data'
+DATA_DIR = '../data'
 
 # Whether to visualize the geographic network
 DRAW_GEO = False
@@ -45,8 +45,8 @@ PRINT_NODE_WEIGHTS = False
 NUM_STEPS = 1
 
 # Number of friendships and kin to create
-NUM_FRIENDS = 2 #  random.randint(1, 3)
-NUM_KIN = 2  # random.randint(1, 3)
+NUM_FRIENDS = 1  # random.randint(1, 3)
+NUM_KIN = 1  # random.randint(1, 3)
 
 # Percentage of refugees that move if in a district with one or more refugee camps
 PERCENT_MOVE_AT_CAMP = 0.3
@@ -77,8 +77,16 @@ NEW_FRIENDS_UPPER = 5
 
 # Number of chunks (processes) to split refugees into during a sim step
 # These dont necessarily have to be equal
-NUM_CHUNKS = 12
-NUM_PROCESSES = 12  # mp.cpu_count()
+NUM_CHUNKS = 4
+NUM_PROCESSES = 4  # mp.cpu_count()
+
+
+def calc_score(n, ref, graph):
+    kin_at_node = len([k for k in ref.kin_list if k in graph.nodes[n]['refugees']])
+    friends_at_node = len([f for f in ref.friend_list if f in graph.nodes[n]['refugees']])
+    desirability = (kin_at_node * KIN_WEIGHT) + (friends_at_node * FRIEND_WEIGHT) + graph.nodes[n][
+        'node_score']  # + self.graph.nodes[n]['']
+    return desirability
 
 
 def find_new_node(graph, node, ref):
@@ -94,13 +102,12 @@ def find_new_node(graph, node, ref):
         # print(ref_pop, "refugees can't move from isolates", node)
         return
 
-    kin = ref.kin_list.keys()
-    friends = ref.friend_list.keys()
-
     # calculate neighbor with highest population
+    # scores = np.array([calc_score(n, ref, graph) for n in neighbors])
+    # most_desirable_neighbor = neighbors[np.argmax(scores)]
     for n in neighbors:
-        kin_at_node = len([k for k in kin if k in graph.nodes[n]['refugees']])
-        friends_at_node = len([f for f in friends if f in graph.nodes[n]['refugees']])
+        kin_at_node = len([k for k in ref.kin_list if k in graph.nodes[n]['refugees']])
+        friends_at_node = len([f for f in ref.friend_list if f in graph.nodes[n]['refugees']])
         desirability = (kin_at_node * KIN_WEIGHT) + (friends_at_node * FRIEND_WEIGHT) + graph.nodes[n][
             'node_score']  # + self.graph.nodes[n]['']
         if desirability > most_desirable_score:
@@ -110,11 +117,11 @@ def find_new_node(graph, node, ref):
     return most_desirable_neighbor
 
 
-def process_refs(refs, graph):
+def process_refs(se, graph, refugees):
     new_refs = []
     ref_nodes = {key: [] for key in graph.nodes}
 
-    for x, ref in enumerate(refs):
+    for x, ref in enumerate(refugees[se[0]:se[1]]):
         node = ref.node
         num_conflicts = graph.nodes[node]['num_conflicts']
         num_camps = graph.nodes[node]['num_camps']
@@ -129,7 +136,7 @@ def process_refs(refs, graph):
             # Neither camp nor conflict
             move = random.random() < PERCENT_MOVE_AT_OTHER
 
-        new_refs.append(copy.deepcopy(ref))  # do we need copy?
+        new_refs.append(ref)  # do we need copy?  copy.deepcopy(ref)
 
         if move:
             new_node = find_new_node(graph, node, ref)
@@ -137,7 +144,7 @@ def process_refs(refs, graph):
                 new_refs[x].node = new_node
 
         # Add ref to its new node
-        ref_nodes[new_refs[x].node].append(ref)
+        ref_nodes[new_refs[x].node].append(ref.id)
 
     # return new refugee list and node weight updates for these refs
     return new_refs, ref_nodes
@@ -148,10 +155,11 @@ class Ref(object):
     Class representative of a single refugee
     """
 
-    def __init__(self, node, num_refugees):
+    def __init__(self, node, _id):
         self.node = node  # Not used. Agent ID == Index in Sim.all_refugees
-        self.kin_list = {}
-        self.friend_list = {}
+        self.kin_list = []
+        self.friend_list = []
+        self.id = _id
 
     def create_social_links(self, index, sim):
         # create kin
@@ -159,18 +167,18 @@ class Ref(object):
             kin = index
             while kin == index:
                 kin = random.randint(0, sim.num_refugees - 1)
-            self.kin_list[kin] = 1
+            self.kin_list.append(kin)
             # set for other kin
-            sim.all_refugees[kin].kin_list[index] = 1
+            sim.all_refugees[kin].kin_list.append(index)
 
         # create friends
         for x in range(NUM_FRIENDS):
             friend = index
             while friend == index:
                 friend = random.randint(0, sim.num_refugees - 1)
-            self.friend_list[friend] = 1
+            self.friend_list.append(friend)
             # set for other friend
-            sim.all_refugees[friend].friend_list[index] = 1
+            sim.all_refugees[friend].friend_list.append(index)
 
 
 class Sim(object):
@@ -186,10 +194,13 @@ class Sim(object):
         self.num_refugees = sum([self.graph.nodes[n]['weight'] for n in self.graph.nodes])
         self.all_refugees = []
         refugees_by_node = {}
+        count = 0
         for node in self.graph.nodes():
-            refs = [Ref(node, self.num_refugees) for x in range(self.graph.nodes[node]['weight'])]
+            refs = [Ref(node, x) for x in range(count, count + self.graph.nodes[node]['weight'])]
             self.all_refugees.extend(refs)
             refugees_by_node[node] = set(refs)
+
+            count += self.graph.nodes[node]['weight']
 
         nx.set_node_attributes(self.graph, refugees_by_node, 'refugees')
 
@@ -229,16 +240,28 @@ class Sim(object):
         if self.num_processes > 1:
             print(f'Staring {self.num_processes} processes...')
             # Chunk refs and send to processes
-            chunked_refs = np.array_split(self.all_refugees, self.num_chunks)
-            partial_pr = partial(process_refs, graph=graph)
+            # chunked_refs = np.array_split(self.all_refugees, self.num_chunks)
+            partial_pr = partial(process_refs, graph=graph, refugees=self.all_refugees)
+
+            bs = len(self.all_refugees) / float(self.num_chunks)
+            if bs % 1 != 0:
+                bs = bs+1
+
+            bs = int(bs)
+
+
+            se = [[x, x+bs] for x in range(0, len(self.all_refugees), bs)]
+            se[-1][-1] = len(self.all_refugees)
+            print(len(se))
+
             pool = Pool(self.num_processes)
 
-            results = pool.map(partial_pr, chunked_refs)
+            results = pool.map(partial_pr, se)
             pool.close()
             pool.join()
         else:
             print('Not Multiprocessing')
-            results = [self.process_refs([x for x in range(len(self.all_refugees))])]
+            results = [process_refs(self.all_refugees, self.graph)]
         print('Gathering results...')
         self.all_refugees = []
         ref_nodes = []
@@ -450,7 +473,7 @@ if __name__ == '__main__':
             # Option 2 - Build graph from preprocessed polys shapefile
             print('Loading graph data from file...')
             start = time.time()
-            polys = gpd.read_file('./data/preprocessed_poly_data.shp')
+            polys = gpd.read_file('../data/preprocessed_poly_data.shp')
             print(f'Completed in {time.time() - start:.2f}s...')
 
         graph = build_graph(polys)
@@ -463,7 +486,7 @@ if __name__ == '__main__':
     if TIME_TRIAL:
 
         num_steps = 5
-        processes = [1, 2, 4, 8, 16]  # , 4, 8, 12, 16]
+        processes = [1, 2, 4, 8, 12]  # , 4, 8, 12, 16]
         chunks = [1]  # , 4, 8, 12, 16]
 
         time_trial(graph, num_steps=num_steps, num_processes=processes, num_batches=chunks)
