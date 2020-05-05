@@ -55,19 +55,24 @@ config = {
     # Set number of simulation steps; 1 step = 1 day
     'num_steps': 1,
 
-    # Number of friendships and kin to create
+    # Number of chunks (processes) to split refugees into during a sim step
+    # These dont necessarily have to be equal
+    'num_batches': 2,
+    'num_processes': 2,  # mp.cpu_count()
+
+    # Number of friendships and kin to create per ref
     'num_friends': 1,  # int for defined number. Tuple (low, high) for random number of friends
     'num_kin': 1,  # int for defined number. Tuple (low, high) for random number of friends
 
     # Percentage of refugees that move if in a district with one or more refugee camps
-    'percent_move_at_camp': 0.3,
+    'camp_move_probability': 0.3,
     # Percentage of refugees that move if in a district with one of more conflict events
-    'percent_move_at_conflict': 1,
+    'conflict_move_probability': 1,
     # Percentage of refugees that move if in a district without a conflict event or a camp
-    'percent_move_other': 0.7,
+    'other_move_probability': 0.7,
 
     # Point to calculate western movement
-    'location': (51.5074, -0.1278),
+    'anchor_location': (51.5074, -0.1278),
 
     # Weight of each of the node desirability variables
     'population_weight': 0.25,  # total number of refs at node
@@ -78,19 +83,14 @@ config = {
     'friend_weight': 0.25,  # (num friends * KIN_WEIGHT)
 
     # Number of refugees to seed each node in border crossing with. new refs = seed_refs * len(seed_nodes)
-    'seed_refs': 0,  # If this is 0, seeding will not occur
-    'seed_nodes': ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'],  # [0, 1, 2, 3]
+    'seed_refs_per_node': 0,  # If this is 0, seeding will not occur
+    'seed_nodes': ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'],
+    # 'seed_nodes': [0, 1, 2, 3],  # For testing
     
     # Number new friends to create between co-located refs at camps.
     # If both = 0, new friends will not be generated.
     'new_friends_lower': 0,
-    'new_friends_upper': 0,
-
-    # Number of chunks (processes) to split refugees into during a sim step
-    # These dont necessarily have to be equal
-    'num_batches': 2,
-    'num_processes': 2  # mp.cpu_count()
-
+    'new_friends_upper': 0
 }
 
 # Create directories for output
@@ -153,10 +153,10 @@ def process_refs(se):
             move = True
         elif num_camps > 0:
             # At a camp
-            move = random.random() < config['percent_move_at_camp']
+            move = random.random() < config['camp_move_probability']
         else:
             # Neither camp nor conflict
-            move = random.random() < config['percent_move_other']
+            move = random.random() < config['other_move_probability']
 
         new_refs.append(copy.deepcopy(ref))
 
@@ -324,13 +324,13 @@ class Sim(object):
                         self.all_refugees[ref2].friend_list[ref1] = 1
             print(f'Added {new_friendships} friendships at camps...')
 
-        if config['seed_refs'] > 0:
+        if config['seed_refs_per_node'] > 0:
             print('Seeding network at border crossings...')
             new_ref_index = self.num_refugees
-            self.num_refugees += config['seed_refs'] * len(config['seed_nodes'])
+            self.num_refugees += config['seed_refs_per_node'] * len(config['seed_nodes'])
             for node in config['seed_nodes']:
-                self.graph.nodes[node]['weight'] += config['seed_refs']
-                self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, config['seed_refs'])])
+                self.graph.nodes[node]['weight'] += config['seed_refs_per_node']
+                self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, config['seed_refs_per_node'])])
                 
             # create social links
             if isinstance(config['num_friends'], int):
@@ -422,8 +422,8 @@ def preprocess():
     # Calculate location score. Districts closest to specified location are scored highest.
     polys['location'] = polys.apply(
         lambda row: math.sqrt(
-            (row.geometry.centroid.x - config['location'][1]) ** 2 + (row.geometry.centroid.y - config['location'][0]) ** 2), axis=1)
-    max_distance = max(list(polys['location']))
+            (row.geometry.centroid.x - config['anchor_location'][1]) ** 2 + (row.geometry.centroid.y - config['anchor_location'][0]) ** 2), axis=1)
+    max_distance = max(list(polys['anchor_location']))
     polys['location'] = polys.apply(lambda row: 1 - (row.location / max_distance), axis=1)
 
     ## Create centroids GPD
