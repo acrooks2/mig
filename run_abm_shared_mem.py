@@ -25,10 +25,10 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 config = {
     # For Testing - set test to True
-    'test': False,
+    'test': True,
     'num_nodes': 1000,
     'avg_num_neighbors': 5,
-    'total_refs': 500000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 1000000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
     'num_camps': 1,
 
     # For running time trials
@@ -57,8 +57,8 @@ config = {
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
-    'num_batches': 2,
-    'num_processes': 2,  # mp.cpu_count()
+    'num_batches': 4,
+    'num_processes': 4,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
     'num_friends': 1,  # int for defined number. Tuple (low, high) for random number of friends
@@ -104,72 +104,6 @@ with open(os.path.join(config['output_dir'], 'parameters.json'), 'w+') as fp:
     json.dump(config, fp, indent=4)
 
 sim = None
-
-def find_new_node(node, ref):
-    global sim
-    # find neighbor with highest weight
-    neighbors = list(sim.graph.neighbors(node))
-
-    # initialize max node value to negative number
-    most_desirable_score = -99
-    most_desirable_neighbor = None
-
-    # check to see if there are neighbors (in case node is isolate)
-    if len(neighbors) == 0:
-        # print(ref_pop, "refugees can't move from isolates", node)
-        return
-
-    kin_nodes = [sim.all_refugees[kin].node for kin in ref.kin_list]
-    friend_nodes = [sim.all_refugees[friend].node for friend in ref.friend_list]
-
-    # calculate neighbor with highest population
-    for n in neighbors:
-        kin_at_node = kin_nodes.count(n)
-        friends_at_node = friend_nodes.count(n)
-        desirability = (kin_at_node * config['kin_weight']) + (friends_at_node * config['friend_weight']) + \
-                       sim.graph.nodes[n][
-                           'node_score']  # + self.graph.nodes[n]['']
-        if desirability > most_desirable_score:
-            most_desirable_score = desirability
-            most_desirable_neighbor = n
-
-    return most_desirable_neighbor
-
-
-def process_refs(se):
-    global sim
-    
-    new_refs = []
-    ref_nodes = {key: [] for key in sim.graph.nodes}
-    new_weights = {key: 0 for key in sim.graph.nodes}
-    
-    for x, ref in enumerate(sim.all_refugees[se[0]:se[1]]):
-        node = ref.node
-        num_conflicts = sim.graph.nodes[node]['num_conflicts']
-        num_camps = sim.graph.nodes[node]['num_camps']
-
-        if num_conflicts > 0:
-            # Conflict zone
-            move = True
-        elif num_camps > 0:
-            # At a camp
-            move = random.random() < config['camp_move_probability']
-        else:
-            # Neither camp nor conflict
-            move = random.random() < config['other_move_probability']
-
-        new_refs.append(copy.deepcopy(ref))
-
-        if move:
-            new_node = find_new_node(node, ref)
-            if new_node:
-                new_refs[x].node = new_node
-            
-        
-        ref_nodes[new_refs[x].node].append(x+se[0])
-
-    # return new refugee list and node weight updates for these refs
-    return new_refs, ref_nodes
 
 
 class Ref(object):
@@ -243,6 +177,71 @@ class Sim(object):
             for index, ref in enumerate(self.all_refugees):
                 ref.create_random_social_links(index, self)
 
+    def find_new_node(self, node, ref):
+        global sim
+        # find neighbor with highest weight
+        neighbors = list(self.graph.neighbors(node))
+
+        # initialize max node value to negative number
+        most_desirable_score = -99
+        most_desirable_neighbor = None
+
+        # check to see if there are neighbors (in case node is isolate)
+        if len(neighbors) == 0:
+            # print(ref_pop, "refugees can't move from isolates", node)
+            return
+
+        kin_nodes = [self.all_refugees[kin].node for kin in ref.kin_list]
+        friend_nodes = [self.all_refugees[friend].node for friend in ref.friend_list]
+
+        # calculate neighbor with highest population
+        for n in neighbors:
+            kin_at_node = kin_nodes.count(n)
+            friends_at_node = friend_nodes.count(n)
+            desirability = (kin_at_node * config['kin_weight']) + (friends_at_node * config['friend_weight']) + \
+                           self.graph.nodes[n][
+                               'node_score']  # + self.graph.nodes[n]['']
+            if desirability > most_desirable_score:
+                most_desirable_score = desirability
+                most_desirable_neighbor = n
+
+        return most_desirable_neighbor
+
+    def process_refs(self, se):
+        global sim
+
+        new_refs = []
+        ref_nodes = {key: [] for key in self.graph.nodes}
+        new_weights = {key: 0 for key in self.graph.nodes}
+
+        for x, ref in enumerate(self.all_refugees[se[0]:se[1]]):
+            node = ref.node
+            num_conflicts = self.graph.nodes[node]['num_conflicts']
+            num_camps = self.graph.nodes[node]['num_camps']
+
+            if num_conflicts > 0:
+                # Conflict zone
+                move = True
+            elif num_camps > 0:
+                # At a camp
+                move = random.random() < config['camp_move_probability']
+            else:
+                # Neither camp nor conflict
+                move = random.random() < config['other_move_probability']
+
+            new_refs.append(copy.deepcopy(ref))
+
+            if move:
+                new_node = self.find_new_node(node, ref)
+                if new_node:
+                    new_refs[x].node = new_node
+
+            ref_nodes[new_refs[x].node].append(x + se[0])
+
+        # return new refugee list and node weight updates for these refs
+        return new_refs, ref_nodes
+
+
     def step(self):
         nx.get_node_attributes(self.graph, 'weight')
         orig_weights = nx.get_node_attributes(self.graph, 'weight')
@@ -286,7 +285,7 @@ class Sim(object):
 
             pool = Pool(self.num_processes)
 
-            results = pool.map(process_refs, se)
+            results = pool.map(self.process_refs, se)
             pool.close()
             pool.join()
         else:
@@ -423,7 +422,7 @@ def preprocess():
     polys['location'] = polys.apply(
         lambda row: math.sqrt(
             (row.geometry.centroid.x - config['anchor_location'][1]) ** 2 + (row.geometry.centroid.y - config['anchor_location'][0]) ** 2), axis=1)
-    max_distance = max(list(polys['anchor_location']))
+    max_distance = max(list(polys['location']))
     polys['location'] = polys.apply(lambda row: 1 - (row.location / max_distance), axis=1)
 
     ## Create centroids GPD
