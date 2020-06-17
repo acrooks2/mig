@@ -25,17 +25,20 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 config = {
     # For Testing - set test to True
-    'test': False,
+    'test': True,
     'num_nodes': 1000,
     'avg_num_neighbors': 5,
-    'total_refs': 500000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
-    'num_camps': 1,
+    'total_refs': 1000000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'num_camps': 0,
 
     # For running time trials
     'time_trial': False,
+    'trial_steps': 1,
+    'trial_processes': [8],
+    'trial_chunks': [1],
 
     # Data commands (not available while testing)
-    'preprocess': True,
+    'preprocess': False,
 
     # Validation (not available while testing)
     'validate': False,
@@ -57,11 +60,11 @@ config = {
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
-    'num_batches': 2,
-    'num_processes': 2,  # mp.cpu_count()
+    'num_batches': 4,
+    'num_processes': 4,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
-    'num_friends': 1,  # int for defined number. Tuple (low, high) for random number of friends
+    'num_friends':1,  # int for defined number. Tuple (low, high) for random number of friends
     'num_kin': 1,  # int for defined number. Tuple (low, high) for random number of friends
 
     # Percentage of refugees that move if in a district with one or more refugee camps
@@ -423,7 +426,7 @@ def preprocess():
     polys['location'] = polys.apply(
         lambda row: math.sqrt(
             (row.geometry.centroid.x - config['anchor_location'][1]) ** 2 + (row.geometry.centroid.y - config['anchor_location'][0]) ** 2), axis=1)
-    max_distance = max(list(polys['anchor_location']))
+    max_distance = max(list(polys['location']))
     polys['location'] = polys.apply(lambda row: 1 - (row.location / max_distance), axis=1)
 
     ## Create centroids GPD
@@ -476,7 +479,9 @@ def draw(polys, graph):
     plt.show()
 
 
-def time_trial(graph, output_file='results.csv', num_steps=10, num_processes=[1], num_batches=[1]):
+def time_trial(graph, output_file='results.csv', num_steps=5, num_processes=[1], num_batches=[1]):
+    global sim
+    
     with open(output_file, 'w+', newline='') as fp:
         writer = csv.writer(fp)
         writer.writerow(['STEPS', 'PROCESSES', 'BATCHES', 'TIME_(S)'])
@@ -531,11 +536,7 @@ if __name__ == '__main__':
             draw(polys, graph)
 
     if config['time_trial']:
-        num_steps = 5
-        processes = [1, 2, 4, 8, 16]  # , 4, 8, 12, 16]
-        chunks = [1]  # , 4, 8, 12, 16]
-
-        time_trial(graph, num_steps=num_steps, num_processes=processes, num_batches=chunks)
+        time_trial(graph, num_steps=config['trial_steps'], num_processes=config['trial_processes'], num_batches=config['trial_chunks'])
         sys.exit()
 
     # Run Sim
