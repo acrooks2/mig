@@ -25,7 +25,7 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 config = {
     # For Testing - set test to True
-    'test': True,
+    'test': False,
     'num_nodes': 1000,
     'avg_num_neighbors': 5,
     'total_refs': 1000000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
@@ -38,10 +38,10 @@ config = {
     'trial_chunks': [1],
 
     # Data commands (not available while testing)
-    'preprocess': False,
+    'preprocess': True,
 
     # Validation (not available while testing)
-    'validate': False,
+    'validate': True,
 
     # Sim params
     'data_dir': './data',  # (not used while testing)
@@ -60,8 +60,8 @@ config = {
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
-    'num_batches': 4,
-    'num_processes': 4,  # mp.cpu_count()
+    'num_batches': 8,
+    'num_processes': 8,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
     'num_friends':1,  # int for defined number. Tuple (low, high) for random number of friends
@@ -86,8 +86,8 @@ config = {
     'friend_weight': 0.25,  # (num friends * KIN_WEIGHT)
 
     # Number of refugees to seed each node in border crossing with. new refs = seed_refs * len(seed_nodes)
-    'seed_refs_per_node': 0,  # If this is 0, seeding will not occur
-    'seed_nodes': ['Merkez Kilis', 'KarkamA+-A', 'YayladaAA+-', 'Kumlu'],
+    'seed_refs_per_node': 50,  # If this is 0, seeding will not occur
+    'seed_nodes': ['Merkez Kilis', 'Karkamis', 'Yayladagi', 'Kumlu'],
     # 'seed_nodes': [0, 1, 2, 3],  # For testing
     
     # Number new friends to create between co-located refs at camps.
@@ -327,6 +327,7 @@ class Sim(object):
                         self.all_refugees[ref2].friend_list[ref1] = 1
             print(f'Added {new_friendships} friendships at camps...')
 
+        print(self.graph.nodes)
         if config['seed_refs_per_node'] > 0:
             print('Seeding network at border crossings...')
             new_ref_index = self.num_refugees
