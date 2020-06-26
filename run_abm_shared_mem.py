@@ -5,6 +5,7 @@ Last Edited: 2020
 
 Spatially-Explicit Agent-Based Model (ABM) of Forced Migration from Syria to Turkey ###
 """
+import psutil
 import json
 import os
 import shutil
@@ -28,7 +29,7 @@ config = {
     'test': False,
     'num_nodes': 1000,
     'avg_num_neighbors': 5,
-    'total_refs': 1000000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 1000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
     'num_camps': 0,
 
     # For running time trials
@@ -56,7 +57,7 @@ config = {
     'write_step_shapefiles': True,  # (not available while testing)
 
     # Set number of simulation steps; 1 step = 1 day
-    'num_steps': 1,
+    'num_steps':20,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
@@ -64,8 +65,8 @@ config = {
     'num_processes': 8,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
-    'num_friends':1,  # int for defined number. Tuple (low, high) for random number of friends
-    'num_kin': 1,  # int for defined number. Tuple (low, high) for random number of friends
+    'num_friends':(0,5),  # int for defined number. Tuple (low, high) for random number of friends
+    'num_kin':(0,5),  # int for defined number. Tuple (low, high) for random number of friends
 
     # Percentage of refugees that move if in a district with one or more refugee camps
     'camp_move_probability': 0.3,
@@ -182,8 +183,8 @@ class Ref(object):
 
     def __init__(self, node, num_refugees):
         self.node = node  # Not used. Agent ID == Index in Sim.all_refugees
-        self.kin_list = {}
-        self.friend_list = {}
+        self.kin_list = []
+        self.friend_list = []
 
     def create_defined_social_links(self, index, sim):
         # create kin
@@ -191,18 +192,18 @@ class Ref(object):
             kin = index
             while kin == index:
                 kin = random.randint(0, sim.num_refugees - 1)
-            self.kin_list[kin] = 1
+            self.kin_list.append(kin)
             # set for other kin
-            sim.all_refugees[kin].kin_list[index] = 1
+            sim.all_refugees[kin].kin_list.append(index)
 
         # create friends
         for x in range(config['num_friends']):
             friend = index
             while friend == index:
                 friend = random.randint(0, sim.num_refugees - 1)
-            self.friend_list[friend] = 1
+            self.friend_list.append(friend)
             # set for other friend
-            sim.all_refugees[friend].friend_list[index] = 1
+            sim.all_refugees[friend].friend_list.append(index)
 
     def create_random_social_links(self, index, sim):
         # create kin
@@ -210,18 +211,18 @@ class Ref(object):
             kin = index
             while kin == index:
                 kin = random.randint(0, sim.num_refugees - 1)
-            self.kin_list[kin] = 1
+            self.kin_list.append(kin)
             # set for other kin
-            sim.all_refugees[kin].kin_list[index] = 1
+            sim.all_refugees[kin].kin_list.append(index)
 
         # create friends
         for x in range(random.randint(config['num_friends'][0], config['num_friends'][1])):
             friend = index
             while friend == index:
                 friend = random.randint(0, sim.num_refugees - 1)
-            self.friend_list[friend] = 1
+            self.friend_list.append(friend)
             # set for other friend
-            sim.all_refugees[friend].friend_list[index] = 1
+            sim.all_refugees[friend].friend_list.append(index)
 
 
 class Sim(object):
@@ -327,7 +328,7 @@ class Sim(object):
                         self.all_refugees[ref2].friend_list[ref1] = 1
             print(f'Added {new_friendships} friendships at camps...')
 
-        print(self.graph.nodes)
+        # print(self.graph.nodes)
         if config['seed_refs_per_node'] > 0:
             print('Seeding network at border crossings...')
             new_ref_index = self.num_refugees
@@ -335,13 +336,13 @@ class Sim(object):
             for node in config['seed_nodes']:
                 self.graph.nodes[node]['weight'] += config['seed_refs_per_node']
                 self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, config['seed_refs_per_node'])])
-                
+            print('Creating social links')    
             # create social links
             if isinstance(config['num_friends'], int):
-                for index, ref in enumerate(self.all_refugees):
+                for index, ref in enumerate(self.all_refugees[new_ref_index:]):
                     ref.create_defined_social_links(index, self)
             else:
-                for index, ref in enumerate(self.all_refugees):
+                for index, ref in enumerate(self.all_refugees[new_ref_index:]):
                     ref.create_random_social_links(index, self)
 
     def run(self):
@@ -360,6 +361,7 @@ class Sim(object):
             step_time = time.time() - start
             avg_step_time += step_time
             print(f'Step Time: {step_time:2f}')
+            print(f'Memory: {psutil.virtual_memory().percent}')
 
         avg_step_time /= self.num_steps
         print(f'Average step time: {avg_step_time:2f}')
@@ -553,8 +555,8 @@ if __name__ == '__main__':
         for node in graph.nodes:
             print(node, start_node_weights[node], end_node_weights[node])
 
-    print("Total start weight:", sum(start_node_weights.values()))
-    print("Total end weight:", sum(end_node_weights.values()))
+#     print("Total start weight:", sum(start_node_weights.values()))
+#     print("Total end weight:", sum(end_node_weights.values()))
 
     if not config['test']:
         # Write out to shapefile
