@@ -595,7 +595,7 @@ if __name__ == '__main__':
         polys['accuracy'] = (polys.simEnd_norm - polys.valPopNorm)
 
         # Write out new shapefile with validation accuracy by district
-        polys.to_file(os.path.join(config['data_dir'], 'validationResults.shp'))
+        polys.to_file(os.path.join(config['output_dir'], 'validationResults.shp'))
 
         # visualize validation output - unnecessary to read again
         # validation = gpd.read_file(os.path.join(DATA_DIR, 'output_5_validation.shp'))
