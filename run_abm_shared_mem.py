@@ -26,7 +26,7 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 config = {
     # For Testing - set test to True
-    'test': True,
+    'test': False,
     'num_nodes': 1000,
     'avg_num_neighbors': 5,
     'total_refs': 1000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
@@ -46,7 +46,7 @@ config = {
 
     # Sim params
     'data_dir': './data',  # (not used while testing)
-    'output_dir': './output',
+    'output_dir': './myTest1', # name of test
 
     # Output params
     # Whether to visualize the geographic network
@@ -57,7 +57,7 @@ config = {
     'write_step_shapefiles': True,  # (not available while testing)
 
     # Set number of simulation steps; 1 step = 1 day
-    'num_steps':20,
+    'num_steps':1,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
@@ -66,8 +66,8 @@ config = {
     'num_processes': 8,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
-    'num_friends':(0,5),  # int for defined number. Tuple (low, high) for random number of friends
-    'num_kin':(0,5),  # int for defined number. Tuple (low, high) for random number of friends
+    'num_friends':(0,1),  # int for defined number. Tuple (low, high) for random number of friends
+    'num_kin':(0,1),  # int for defined number. Tuple (low, high) for random number of friends
 
     # Percentage of refugees that move if in a district with one or more refugee camps
     'camp_move_probability': 0.3,
