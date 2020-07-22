@@ -27,9 +27,9 @@ from multiprocessing.pool import Pool
 config = {
     # For Testing - set test to True
     'test': False,
-    'num_nodes': 50,
+    'num_nodes': 1000,
     'avg_num_neighbors': 5,
-    'total_refs': 50,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 1000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
     'num_camps': 0,
 
     # For running time trials
@@ -57,13 +57,13 @@ config = {
     'write_step_shapefiles': True,  # (not available while testing)
 
     # Set number of simulation steps; 1 step = 1 day
-    'num_steps':1,
+    'num_steps':8,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
 
-    'num_batches': 2,
-    'num_processes': 2,  # mp.cpu_count()
+    'num_batches': 8,
+    'num_processes': 8,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
     'num_friends':(0,1),  # int for defined number. Tuple (low, high) for random number of friends
@@ -166,9 +166,8 @@ class Sim(object):
     Class representative of the simulation
     """
 
-    def __init__(self, graph, paths, num_steps=10, num_processes=1, num_batches=1):
+    def __init__(self, graph, num_steps=10, num_processes=1, num_batches=1):
         self.graph = graph
-        self.paths = paths
         self.num_steps = num_steps
         self.num_processes = num_processes
         self.num_batches = num_batches
@@ -187,35 +186,31 @@ class Sim(object):
     def find_new_node(self, node, ref):
         global sim
         # find neighbor with highest weight
-        # neighbors = list(self.graph.neighbors(node))
+        neighbors = list(self.graph.neighbors(node))
 
         # initialize max node value to negative number
         most_desirable_score = -99
         most_desirable_neighbor = None
 
         # check to see if there are neighbors (in case node is isolate)
-        # if len(neighbors) == 0:
+        if len(neighbors) == 0:
             # print(ref_pop, "refugees can't move from isolates", node)
-            # return
+            return
 
         kin_nodes = [self.all_refugees[kin].node for kin in ref.kin_list]
         friend_nodes = [self.all_refugees[friend].node for friend in ref.friend_list]
 
         # calculate neighbor with highest population
-        for n in self.graph.nodes:
+        for n in neighbors:
             kin_at_node = kin_nodes.count(n)
             friends_at_node = friend_nodes.count(n)
             desirability = (kin_at_node * config['kin_weight']) + (friends_at_node * config['friend_weight']) + \
                            self.graph.nodes[n][
                                'node_score']  # + self.graph.nodes[n]['']
-            if (desirability > most_desirable_score) and n in self.paths[node].keys():
+            if desirability > most_desirable_score:
                 most_desirable_score = desirability
                 most_desirable_neighbor = n
 
-                
-        if str(most_desirable_neighbor) in str(node):
-            return None
-        
         return most_desirable_neighbor
 
     def process_refs(self, se):
@@ -243,12 +238,9 @@ class Sim(object):
             new_refs.append(copy.deepcopy(ref))
 
             if move:
-                high_node = self.find_new_node(node, ref)
-                if high_node:
-                    # new_refs[x].node_history.append(node)
-#                     print(node, high_node)
-#                     print(self.paths[node][high_node])
-                    new_node = self.paths[node][high_node][1]  # the next node in the list in the direction of most desirable
+                new_node = self.find_new_node(node, ref)
+                if new_node:
+                    new_refs[x].node_history.append(node)
                     new_refs[x].node = new_node
                     refs_moved += 1
 
@@ -562,18 +554,10 @@ if __name__ == '__main__':
         time_trial(graph, num_steps=config['trial_steps'], num_processes=config['trial_processes'], num_batches=config['trial_chunks'])
         sys.exit()
 
-        
-    # Compute shortest paths of the entire graph
-    s = time.time()
-    paths = dict(nx.all_pairs_shortest_path(graph))
-    s = time.time() - s
-    print(f'Took {s:.2f} seconds to compute shortest paths.')
-  
-    
     # Run Sim
     print('Creating sim...')
     start = time.time()
-    sim = Sim(graph, paths, config['num_steps'], config['num_processes'], config['num_batches'])
+    sim = Sim(graph, config['num_steps'], config['num_processes'], config['num_batches'])
     print(f'Created sim in {time.time() - start:.2f}s...')
 
     start_node_weights = nx.get_node_attributes(sim.graph, 'weight')
