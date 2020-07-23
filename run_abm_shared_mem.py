@@ -57,13 +57,13 @@ config = {
     'write_step_shapefiles': True,  # (not available while testing)
 
     # Set number of simulation steps; 1 step = 1 day
-    'num_steps':1,
+    'num_steps':5,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
 
-    'num_batches': 2,
-    'num_processes': 2,  # mp.cpu_count()
+    'num_batches': 8,
+    'num_processes': 8,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
     'num_friends':(0,1),  # int for defined number. Tuple (low, high) for random number of friends
@@ -213,6 +213,7 @@ class Sim(object):
                 most_desirable_neighbor = n
 
                 
+        # dont move if most desirable node is current node
         if str(most_desirable_neighbor) in str(node):
             return None
         
@@ -374,11 +375,10 @@ class Sim(object):
                 polys['REFPOP'] = polys['NAME_2'].map(node_weights)
                 polys.to_file(os.path.join(config['output_dir'], 'shapefiles/', f'simOutput_{x:03}.shp'))
 
-            step_time = time.time() - start
             avg_step_time += step_time
             avg_refs_moved += refs_moved
             print(f'Step Time: {step_time:2f}')
-            print(f'Memory: {psutil.virtual_memory().percent}')
+#             print(f'Memory: {psutil.virtual_memory().percent}')
             print(f'Num refs moved: {refs_moved}')
 
         avg_step_time /= self.num_steps
