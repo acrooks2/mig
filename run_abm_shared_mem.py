@@ -27,9 +27,9 @@ from multiprocessing.pool import Pool
 config = {
     # For Testing - set test to True
     'test': False,
-    'num_nodes': 50,
+    'num_nodes': 500,
     'avg_num_neighbors': 5,
-    'total_refs': 50,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 50000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
     'num_camps': 0,
 
     # For running time trials
@@ -62,8 +62,8 @@ config = {
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
 
-    'num_batches': 8,
-    'num_processes': 8,  # mp.cpu_count()
+    'num_batches': 16,
+    'num_processes': 16,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
     'num_friends':(0,1),  # int for defined number. Tuple (low, high) for random number of friends
@@ -97,16 +97,6 @@ config = {
     'new_friends_lower': 0,
     'new_friends_upper': 0
 }
-
-# Create directories for output
-if not os.path.exists(config['output_dir']):
-    os.makedirs(config['output_dir'])
-if not os.path.exists(os.path.join(config['output_dir'], 'shapefiles/')):
-    os.makedirs(os.path.join(config['output_dir'], 'shapefiles/'))
-
-# Write params to file
-with open(os.path.join(config['output_dir'], 'parameters.json'), 'w+') as fp:
-    json.dump(config, fp, indent=4)
 
 sim = None
 
@@ -187,11 +177,13 @@ class Sim(object):
     def find_new_node(self, node, ref):
         global sim
         # find neighbor with highest weight
-        # neighbors = list(self.graph.neighbors(node))
-
+#         neighbors = list(self.graph.neighbors(node))
+#         if len(neighbors) == 0:
+#             return node
+        
         # initialize max node value to negative number
-        most_desirable_score = -99
-        most_desirable_neighbor = None
+#         most_desirable_score = -99
+#         most_desirable_neighbor = None
 
         # check to see if there are neighbors (in case node is isolate)
         # if len(neighbors) == 0:
@@ -201,21 +193,33 @@ class Sim(object):
         kin_nodes = [self.all_refugees[kin].node for kin in ref.kin_list]
         friend_nodes = [self.all_refugees[friend].node for friend in ref.friend_list]
 
+#         nodes = list(self.graph.nodes)
         # calculate neighbor with highest population
-        for n in self.graph.nodes:
+#         while nodes:
+            
+        most_desirable_score = -99
+        most_desirable_neighbor = None
+            
+        for n in self.graph.nodes: 
             kin_at_node = kin_nodes.count(n)
             friends_at_node = friend_nodes.count(n)
             desirability = (kin_at_node * config['kin_weight']) + (friends_at_node * config['friend_weight']) + \
-                           self.graph.nodes[n][
-                               'node_score']  # + self.graph.nodes[n]['']
-            if (desirability > most_desirable_score) and n in self.paths[node].keys():
+                            self.graph.nodes[n][
+                                'node_score']  # + self.graph.nodes[n]['']
+            if (desirability > most_desirable_score):
                 most_desirable_score = desirability
                 most_desirable_neighbor = n
+            
+#             # check to make sure the path to the node exists
+#             if most_desirable_neighbor in self.paths[node].keys():
+#                 nodes = False
+#             else:
+#                 nodes.remove(n)
 
                 
         # dont move if most desirable node is current node
-        if str(most_desirable_neighbor) in str(node):
-            return None
+#         if str(most_desirable_neighbor) in str(node):
+#             return None
         
         return most_desirable_neighbor
 
@@ -241,18 +245,15 @@ class Sim(object):
                 # Neither camp nor conflict
                 move = random.random() < config['other_move_probability']
 
-            new_refs.append(copy.deepcopy(ref))
-
-            if move:
+            new_refs.append(ref) # copy.deepcopy(ref)
+            new_refs[x].node_history.append(node)
+            if move:  # and node in self.paths.keys()
                 high_node = self.find_new_node(node, ref)
-                if high_node:
-                    # new_refs[x].node_history.append(node)
-#                     print(node, high_node)
-#                     print(self.paths[node][high_node])
-                    new_node = self.paths[node][high_node][1]  # the next node in the list in the direction of most desirable
-                    new_refs[x].node = new_node
-                    refs_moved += 1
+                new_node = self.paths[node][high_node][1]  # the next node in the list in the direction of most desirable
+                new_refs[x].node = new_node
+                refs_moved += 1
 
+            
             ref_nodes[new_refs[x].node].append(x + se[0])
 
         # return new refugee list and node weight updates for these refs
@@ -375,6 +376,7 @@ class Sim(object):
                 polys['REFPOP'] = polys['NAME_2'].map(node_weights)
                 polys.to_file(os.path.join(config['output_dir'], 'shapefiles/', f'simOutput_{x:03}.shp'))
 
+            step_time = time.time() - start
             avg_step_time += step_time
             avg_refs_moved += refs_moved
             print(f'Step Time: {step_time:2f}')
@@ -517,10 +519,21 @@ def time_trial(graph, output_file='results.csv', num_steps=5, num_processes=[1],
             fp.flush()
 
 
-if __name__ == '__main__':
+def run_sim():
     """
     Program Execution starts here
     """
+    
+    # Create directories for output
+    if not os.path.exists(config['output_dir']):
+        os.makedirs(config['output_dir'])
+    if not os.path.exists(os.path.join(config['output_dir'], 'shapefiles/')):
+        os.makedirs(os.path.join(config['output_dir'], 'shapefiles/'))
+
+    # Write params to file
+    with open(os.path.join(config['output_dir'], 'parameters.json'), 'w+') as fp:
+        json.dump(config, fp, indent=4)
+    
     
     if config['test']:
         print('Building test graph...')
@@ -562,13 +575,20 @@ if __name__ == '__main__':
         time_trial(graph, num_steps=config['trial_steps'], num_processes=config['trial_processes'], num_batches=config['trial_chunks'])
         sys.exit()
 
+    # Remove isloates from graph - todo- change this to be connected to closest node
+    graph.remove_nodes_from(list(nx.isolates(graph)))
         
     # Compute shortest paths of the entire graph
     s = time.time()
+    # add to dict self paths
     paths = dict(nx.all_pairs_shortest_path(graph))
+    for x in graph.nodes:
+        paths[x][x] = [x, x]
+        
     s = time.time() - s
     print(f'Took {s:.2f} seconds to compute shortest paths.')
-  
+    
+    
     
     # Run Sim
     print('Creating sim...')
@@ -645,3 +665,30 @@ if __name__ == '__main__':
 
         # SHOW PLOTS
         plt.show()
+
+        
+        
+def run_experiments(path, output_path):
+    global config
+    
+    # Create directories for output
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+        
+    for d in list(os.listdir(path))[:2]:
+        config_path = os.path.join(path, d, 'parameters.json')
+        with open(config_path, 'r') as fp:
+            print(config_path)
+            config = json.load(fp)
+            config['validate'] = True
+            if config['output_dir'].startswith('.'):
+                config['output_dir'] = config['output_dir'][2:]
+            config['output_dir'] = os.path.join(output_path, config['output_dir'])
+            
+        # Run sim with the loaded config
+        run_sim()
+
+        
+if __name__ == '__main__':
+    # run_sim()
+    run_experiments('./experiment_configs', './experiments/')
