@@ -26,7 +26,7 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 config = {
     # For Testing - set test to True
-    'test': True,
+    'test': False,
     'num_nodes': 500,
     'avg_num_neighbors': 5,
     'total_refs': 5000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
@@ -57,7 +57,7 @@ config = {
     'write_step_shapefiles': True,  # (not available while testing)
 
     # Set number of simulation steps; 1 step = 1 day
-    'num_steps':8,
+    'num_steps':60,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
@@ -618,7 +618,6 @@ def run_sim():
         for node in graph.nodes:
             print(node, start_node_weights[node], end_node_weights[node])
 
-    print(sim.num_refugees)
     # print the node history for first 100 nodes
 #     for ref in sim.all_refugees[:100]:
 #         print(ref.node_history)
