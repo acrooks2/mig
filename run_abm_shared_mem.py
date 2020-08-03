@@ -87,10 +87,12 @@ config = {
     'kin_weight': 1,  # (num kin * FRIEND_WEIGHT)
     'friend_weight': 1,  # (num friends * KIN_WEIGHT)
 
-    # Number of refugees to seed each node in border crossing with. new refs = seed_refs * len(seed_nodes)
-    'seed_refs_per_node': (10, 75),  # If this is 0, seeding will not occur
-    #'seed_nodes': ['Merkez Kilis', 'Karkamis', 'Yayladagi', 'Kumlu'],
-    'seed_nodes': [0, 1, 2, 3, 4, 5, 6, 7],  # For testing
+    # Number of refugees to seed each node in border crossing.
+    # Int = static number of refs created per node per time step
+    # Tuple(Int, Int) = random number of reds created per node per time step
+    'seed_refs_per_node': 50,  # If this is 0, seeding will not occur
+    'seed_nodes': ['Merkez Kilis', 'Karkamis', 'Yayladagi', 'Kumlu'],
+    # 'seed_nodes': [0, 1, 2, 3, 4, 5, 6, 7],  # For testing
     
     # Number new friends to create between co-located refs at camps.
     # If both = 0, new friends will not be generated.
