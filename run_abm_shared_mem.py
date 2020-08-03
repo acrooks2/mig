@@ -26,10 +26,10 @@ from multiprocessing.pool import Pool
 # CONSTANTS
 config = {
     # For Testing - set test to True
-    'test': False,
+    'test': True,
     'num_nodes': 500,
     'avg_num_neighbors': 5,
-    'total_refs': 50000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
+    'total_refs': 5000,  # refs per node = TOTAL_NUM_REFUGEES / NUM_NODES
     'num_camps': 0,
 
     # For running time trials
@@ -46,7 +46,7 @@ config = {
 
     # Sim params
     'data_dir': './data',  # (not used while testing)
-    'output_dir': './myTest1', # name of test
+    'output_dir': './experiments/final_model_run_1', # name of test
 
     # Output params
     # Whether to visualize the geographic network
@@ -57,7 +57,7 @@ config = {
     'write_step_shapefiles': True,  # (not available while testing)
 
     # Set number of simulation steps; 1 step = 1 day
-    'num_steps':5,
+    'num_steps':8,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
@@ -66,11 +66,11 @@ config = {
     'num_processes': 16,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
-    'num_friends':(0,1),  # int for defined number. Tuple (low, high) for random number of friends
-    'num_kin':(0,1),  # int for defined number. Tuple (low, high) for random number of friends
+    'num_friends':(5, 10),  # int for defined number. Tuple (low, high) for random number of friends
+    'num_kin':(5, 10),  # int for defined number. Tuple (low, high) for random number of friends
 
     # Percentage of refugees that move if in a district with one or more refugee camps
-    'camp_move_probability': 0.3,
+    'camp_move_probability': 0.7,
     # Percentage of refugees that move if in a district with one of more conflict events
     'conflict_move_probability': 1,
     # Percentage of refugees that move if in a district without a conflict event or a camp
@@ -80,17 +80,17 @@ config = {
     'anchor_location': (51.5074, -0.1278),
 
     # Weight of each of the node desirability variables
-    'population_weight': 0.25,  # total number of refs at node
+    'population_weight': 1,  # total number of refs at node
     'location_weight': 0.25,  # closeness to LOCATION point
-    'camp_weight': 0.25,  # (camps * CAMP_WEIGHT)
+    'camp_weight': 1,  # (camps * CAMP_WEIGHT)
     'conflict_weight': 0.25,  # (conflicts * (-1) * CONFLICT_WEIGHT)
-    'kin_weight': 0.25,  # (num kin * FRIEND_WEIGHT)
-    'friend_weight': 0.25,  # (num friends * KIN_WEIGHT)
+    'kin_weight': 1,  # (num kin * FRIEND_WEIGHT)
+    'friend_weight': 1,  # (num friends * KIN_WEIGHT)
 
     # Number of refugees to seed each node in border crossing with. new refs = seed_refs * len(seed_nodes)
-    'seed_refs_per_node': 50,  # If this is 0, seeding will not occur
-    'seed_nodes': [],  # ['Merkez Kilis', 'Karkamis', 'Yayladagi', 'Kumlu'],
-    # 'seed_nodes': [0, 1, 2, 3],  # For testing
+    'seed_refs_per_node': (10, 75),  # If this is 0, seeding will not occur
+    #'seed_nodes': ['Merkez Kilis', 'Karkamis', 'Yayladagi', 'Kumlu'],
+    'seed_nodes': [0, 1, 2, 3, 4, 5, 6, 7],  # For testing
     
     # Number new friends to create between co-located refs at camps.
     # If both = 0, new friends will not be generated.
@@ -110,7 +110,7 @@ class Ref(object):
         self.node = node  # Not used. Agent ID == Index in Sim.all_refugees
         self.kin_list = []
         self.friend_list = []
-        self.node_history = []
+#         self.node_history = []
 
     def create_defined_social_links(self, index, sim):
         # create kin
@@ -245,8 +245,8 @@ class Sim(object):
                 # Neither camp nor conflict
                 move = random.random() < config['other_move_probability']
 
-            new_refs.append(ref) # copy.deepcopy(ref)
-            new_refs[x].node_history.append(node)
+            new_refs.append(copy.deepcopy(ref))
+#             new_refs[x].node_history.append(node)
             if move:  # and node in self.paths.keys()
                 high_node = self.find_new_node(node, ref)
                 new_node = self.paths[node][high_node][1]  # the next node in the list in the direction of most desirable
@@ -344,14 +344,26 @@ class Sim(object):
             print(f'Added {new_friendships} friendships at camps...')
 
         # print(self.graph.nodes)
-        if config['seed_refs_per_node'] > 0:
+        
+        
+        def iterable(obj):
+            try:
+                iter(obj)
+            except Exception:
+                return False
+            else:
+                return True
+
+        if (isinstance(config['seed_refs_per_node'], int) and config['seed_refs_per_node'] > 0) or (iterable(config['seed_refs_per_node']) and config['seed_refs_per_node'][0] > 0):
             print('Seeding network at border crossings...')
             new_ref_index = self.num_refugees
-            self.num_refugees += config['seed_refs_per_node'] * len(config['seed_nodes'])
+           
             for node in config['seed_nodes']:
-                self.graph.nodes[node]['weight'] += config['seed_refs_per_node']
-                self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, config['seed_refs_per_node'])])
-            print('Creating social links')    
+                num_refs = random.randint(config['seed_refs_per_node'][0], config['seed_refs_per_node'][1]) if iterable(config['seed_refs_per_node']) else config['seed_refs_per_node']
+                self.num_refugees += num_refs
+                self.graph.nodes[node]['weight'] += num_refs
+                self.all_refugees.extend([Ref(node, self.num_refugees) for x in range(0, num_refs)])
+            print('Creating social links')
             # create social links
             if isinstance(config['num_friends'], int):
                 for index, ref in enumerate(self.all_refugees[new_ref_index:]):
@@ -362,7 +374,7 @@ class Sim(object):
 
         return total_refs_moved
                     
-    def run(self):
+    def run(self, polys=None):
         avg_step_time = 0
         avg_refs_moved = 0
         for x in list(range(self.num_steps)):
@@ -370,7 +382,7 @@ class Sim(object):
             print(f'Starting step {x + 1}...')
             refs_moved = self.step()
 
-            if config['write_step_shapefiles'] and not config['test']:
+            if config['write_step_shapefiles'] and not config['test'] and polys:
                 node_weights = nx.get_node_attributes(self.graph, 'weight')
                 # Write out to shapefile
                 polys['REFPOP'] = polys['NAME_2'].map(node_weights)
@@ -380,7 +392,6 @@ class Sim(object):
             avg_step_time += step_time
             avg_refs_moved += refs_moved
             print(f'Step Time: {step_time:2f}')
-#             print(f'Memory: {psutil.virtual_memory().percent}')
             print(f'Num refs moved: {refs_moved}')
 
         avg_step_time /= self.num_steps
@@ -524,6 +535,8 @@ def run_sim():
     Program Execution starts here
     """
     
+    global sim
+    
     # Create directories for output
     if not os.path.exists(config['output_dir']):
         os.makedirs(config['output_dir'])
@@ -550,6 +563,8 @@ def run_sim():
         nx.set_node_attributes(graph, name='num_conflicts', values=1)  # todo - can make this random
         nx.set_node_attributes(graph, name='num_camps', values=config['num_camps'])  # todo - can make this random
         nx.set_node_attributes(graph, name='location_score', values=0.5)  # todo - can make this random
+        
+        polys = None
     else:
         if config['preprocess']:  # Run pre-processing
             # Option 1 - Preprocess shapefiles
@@ -597,15 +612,16 @@ def run_sim():
     print(f'Created sim in {time.time() - start:.2f}s...')
 
     start_node_weights = nx.get_node_attributes(sim.graph, 'weight')
-    sim.run()
+    sim.run(polys)
     end_node_weights = nx.get_node_attributes(sim.graph, 'weight')
     if config['print_node_weights']:
         for node in graph.nodes:
             print(node, start_node_weights[node], end_node_weights[node])
 
+    print(sim.num_refugees)
     # print the node history for first 100 nodes
-    for ref in sim.all_refugees[:100]:
-        print(ref.node_history)
+#     for ref in sim.all_refugees[:100]:
+#         print(ref.node_history)
             
             
 #     print("Total start weight:", sum(start_node_weights.values()))
@@ -675,12 +691,16 @@ def run_experiments(path, output_path):
     if not os.path.exists(output_path):
         os.makedirs(output_path)
         
-    for d in list(os.listdir(path))[:2]:
+    for d in list(os.listdir(path)):
         config_path = os.path.join(path, d, 'parameters.json')
         with open(config_path, 'r') as fp:
             print(config_path)
             config = json.load(fp)
             config['validate'] = True
+            config['num_processes'] = 16
+            config['num_batches'] = 16
+            config['preprocess'] = False
+            config['num_steps'] = 14
             if config['output_dir'].startswith('.'):
                 config['output_dir'] = config['output_dir'][2:]
             config['output_dir'] = os.path.join(output_path, config['output_dir'])
@@ -688,7 +708,10 @@ def run_experiments(path, output_path):
         # Run sim with the loaded config
         run_sim()
 
-        
+# Main Simulation Method        
 if __name__ == '__main__':
-    # run_sim()
-    run_experiments('./experiment_configs', './experiments/')
+    # To run a single simulation
+    run_sim()
+    
+    # To run all experimental simulations scenarios
+    # run_experiments('./experiment_configs', './experiments/')
