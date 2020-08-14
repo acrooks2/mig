@@ -178,33 +178,34 @@ class Sim(object):
 
     def find_new_node(self, node, ref):
         global sim
-        # find neighbor with highest weight
-#         neighbors = list(self.graph.neighbors(node))
-#         if len(neighbors) == 0:
-#             return node
+
+        def normalize_social_score(score):
+            if score == 0:
+                return score
+            elif score >= 5:
+                return .7
+            elif score >= 3:
+                return 7
+            elif score >= 2:
+                return .5
+            elif score >= 1:
+                return .3
         
-        # initialize max node value to negative number
-#         most_desirable_score = -99
-#         most_desirable_neighbor = None
-
-        # check to see if there are neighbors (in case node is isolate)
-        # if len(neighbors) == 0:
-            # print(ref_pop, "refugees can't move from isolates", node)
-            # return
-
         kin_nodes = [self.all_refugees[kin].node for kin in ref.kin_list]
         friend_nodes = [self.all_refugees[friend].node for friend in ref.friend_list]
 
-#         nodes = list(self.graph.nodes)
-        # calculate neighbor with highest population
-#         while nodes:
-            
+        # initialize max node value to negative number
         most_desirable_score = -99
         most_desirable_neighbor = None
             
         for n in self.graph.nodes: 
             kin_at_node = kin_nodes.count(n)
             friends_at_node = friend_nodes.count(n)
+            
+            # normalize scores NEW
+            kin_at_node = normalize_social_score(kin_at_node)
+            friends_at_node = normalize_social_score(friends_at_node)
+        
             desirability = (kin_at_node * config['kin_weight']) + (friends_at_node * config['friend_weight']) + \
                             self.graph.nodes[n][
                                 'node_score']  # + self.graph.nodes[n]['']
