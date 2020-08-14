@@ -57,7 +57,7 @@ config = {
     'write_step_shapefiles': True,  # (not available while testing)
 
     # Set number of simulation steps; 1 step = 1 day
-    'num_steps':60,
+    'num_steps':1,
 
     # Number of chunks (processes) to split refugees into during a sim step
     # These dont necessarily have to be equal
@@ -66,8 +66,8 @@ config = {
     'num_processes': 16,  # mp.cpu_count()
 
     # Number of friendships and kin to create per ref
-    'num_friends':(5, 10),  # int for defined number. Tuple (low, high) for random number of friends
-    'num_kin':(5, 10),  # int for defined number. Tuple (low, high) for random number of friends
+    'num_friends': 1,  # (5, 10),  # int for defined number. Tuple (low, high) for random number of friends
+    'num_kin': 1,  # (5, 10),  # int for defined number. Tuple (low, high) for random number of friends
 
     # Percentage of refugees that move if in a district with one or more refugee camps
     'camp_move_probability': 0.7,
@@ -84,8 +84,10 @@ config = {
     'location_weight': 0.25,  # closeness to LOCATION point
     'camp_weight': 1,  # (camps * CAMP_WEIGHT)
     'conflict_weight': 0.25,  # (conflicts * (-1) * CONFLICT_WEIGHT)
-    'kin_weight': 1,  # (num kin * FRIEND_WEIGHT)
-    'friend_weight': 1,  # (num friends * KIN_WEIGHT)
+    'kin_weight': .1,  # (num kin * FRIEND_WEIGHT)
+    'friend_weight': .1,  # (num friends * KIN_WEIGHT)
+    'max_kin': 10,
+    'max_friends': 10,
 
     # Number of refugees to seed each node in border crossing.
     # Int = static number of refs created per node per time step
@@ -179,17 +181,17 @@ class Sim(object):
     def find_new_node(self, node, ref):
         global sim
 
-        def normalize_social_score(score):
-            if score == 0:
-                return score
-            elif score >= 5:
-                return .7
-            elif score >= 3:
-                return 7
-            elif score >= 2:
-                return .5
-            elif score >= 1:
-                return .3
+#         def normalize_social_score(score):
+#             if score == 0:
+#                 return score
+#             elif score >= 5:
+#                 return .7
+#             elif score >= 3:
+#                 return 7
+#             elif score >= 2:
+#                 return .5
+#             elif score >= 1:
+#                 return .3
         
         kin_nodes = [self.all_refugees[kin].node for kin in ref.kin_list]
         friend_nodes = [self.all_refugees[friend].node for friend in ref.friend_list]
@@ -201,14 +203,11 @@ class Sim(object):
         for n in self.graph.nodes: 
             kin_at_node = kin_nodes.count(n)
             friends_at_node = friend_nodes.count(n)
+                    
+            desirability = (max(kin_at_node, config['max_kin']) * config['kin_weight']) + \
+                           (max(friends_at_node, config['max_friends']) * config['friend_weight']) + \
+                           self.graph.nodes[n]['node_score']
             
-            # normalize scores NEW
-            kin_at_node = normalize_social_score(kin_at_node)
-            friends_at_node = normalize_social_score(friends_at_node)
-        
-            desirability = (kin_at_node * config['kin_weight']) + (friends_at_node * config['friend_weight']) + \
-                            self.graph.nodes[n][
-                                'node_score']  # + self.graph.nodes[n]['']
             if (desirability > most_desirable_score):
                 most_desirable_score = desirability
                 most_desirable_neighbor = n
@@ -385,7 +384,7 @@ class Sim(object):
             print(f'Starting step {x + 1}...')
             refs_moved = self.step()
 
-            if config['write_step_shapefiles'] and not config['test'] and polys:
+            if config['write_step_shapefiles'] and not config['test'] and polys is not None:
                 node_weights = nx.get_node_attributes(self.graph, 'weight')
                 # Write out to shapefile
                 polys['REFPOP'] = polys['NAME_2'].map(node_weights)
