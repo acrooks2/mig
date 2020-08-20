@@ -180,48 +180,25 @@ class Sim(object):
 
     def find_new_node(self, node, ref):
         global sim
-
-#         def normalize_social_score(score):
-#             if score == 0:
-#                 return score
-#             elif score >= 5:
-#                 return .7
-#             elif score >= 3:
-#                 return 7
-#             elif score >= 2:
-#                 return .5
-#             elif score >= 1:
-#                 return .3
         
         kin_nodes = [self.all_refugees[kin].node for kin in ref.kin_list]
         friend_nodes = [self.all_refugees[friend].node for friend in ref.friend_list]
 
         # initialize max node value to negative number
         most_desirable_score = -99
-        most_desirable_neighbor = None
+        most_desirable_neighbor = node
             
         for n in self.graph.nodes: 
-            kin_at_node = kin_nodes.count(n)
-            friends_at_node = friend_nodes.count(n)
-                    
-            desirability = (max(kin_at_node, config['max_kin']) * config['kin_weight']) + \
-                           (max(friends_at_node, config['max_friends']) * config['friend_weight']) + \
-                           self.graph.nodes[n]['node_score']
-            
-            if (desirability > most_desirable_score):
-                most_desirable_score = desirability
-                most_desirable_neighbor = n
-            
-#             # check to make sure the path to the node exists
-#             if most_desirable_neighbor in self.paths[node].keys():
-#                 nodes = False
-#             else:
-#                 nodes.remove(n)
+            if self.graph.nodes[n]['node_score'] > self.graph.nodes[node]['node_score']:
+                kin_at_node = kin_nodes.count(n)
+                friends_at_node = friend_nodes.count(n)
+                desirability = (max(kin_at_node, config['max_kin']) * config['kin_weight']) + \
+                               (max(friends_at_node, config['max_friends']) * config['friend_weight']) + \
+                               self.graph.nodes[n]['node_score']
 
-                
-        # dont move if most desirable node is current node
-#         if str(most_desirable_neighbor) in str(node):
-#             return None
+                if (desirability > most_desirable_score):
+                    most_desirable_score = desirability
+                    most_desirable_neighbor = n
         
         return most_desirable_neighbor
 
@@ -248,7 +225,6 @@ class Sim(object):
                 move = random.random() < config['other_move_probability']
 
             new_refs.append(copy.deepcopy(ref))
-#             new_refs[x].node_history.append(node)
             if move:  # and node in self.paths.keys()
                 high_node = self.find_new_node(node, ref)
                 new_node = self.paths[node][high_node][1]  # the next node in the list in the direction of most desirable
@@ -604,8 +580,6 @@ def run_sim():
         
     s = time.time() - s
     print(f'Took {s:.2f} seconds to compute shortest paths.')
-    
-    
     
     # Run Sim
     print('Creating sim...')
